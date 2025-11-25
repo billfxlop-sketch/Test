@@ -1,0 +1,78 @@
+2024-01-15 00:00:01 - SYSTEM_START: MAUT Panel Pro initialized
+2024-01-15 00:00:05 - SERVICE_START: xray service started successfully
+2024-01-15 00:00:10 - SERVICE_START: ssh service started successfully
+2024-01-15 00:00:15 - CONFIG_LOADED: theme configuration loaded
+2024-01-15 00:00:20 - CONFIG_LOADED: services configuration loaded
+2024-01-15 00:00:25 - CRON_SETUP: auto-backup scheduled for 02:00 daily
+2024-01-15 00:00:30 - CRON_SETUP: monitoring scheduled every 5 minutes
+2024-01-15 00:00:35 - CRON_SETUP: multi-login killer scheduled every minute
+2024-01-15 00:00:40 - CRON_SETUP: banner update scheduled every minute
+2024-01-15 00:01:00 - BANNER_UPDATE: SSH banner updated successfully
+2024-01-15 00:01:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 00:05:00 - MONITOR_CHECK: CPU=12%, RAM=45%, DISK=65% - All services running
+2024-01-15 00:10:00 - USER_ADD: username=john_doe, service=vmess, port=8443, expire_date=2024-02-14
+2024-01-15 00:10:05 - XRAY_CONFIG_UPDATE: Added user john_doe to vmess inbound
+2024-01-15 00:10:10 - SERVICE_RESTART: xray service restarted for config update
+2024-01-15 00:15:00 - USER_ADD: username=alice_smith, service=vless, port=2083, expire_date=2024-02-14
+2024-01-15 00:15:05 - XRAY_CONFIG_UPDATE: Added user alice_smith to vless inbound
+2024-01-15 00:15:10 - SERVICE_RESTART: xray service restarted for config update
+2024-01-15 00:20:00 - USER_ADD: username=bob_wilson, service=trojan, port=2087, expire_date=2024-02-14
+2024-01-15 00:20:05 - XRAY_CONFIG_UPDATE: Added user bob_wilson to trojan inbound
+2024-01-15 00:20:10 - SERVICE_RESTART: xray service restarted for config update
+2024-01-15 00:25:00 - USER_ADD: username=carol_davis, service=shadowsocks, port=8444, expire_date=2024-02-14
+2024-01-15 00:25:05 - XRAY_CONFIG_UPDATE: Added user carol_davis to shadowsocks inbound
+2024-01-15 00:25:10 - SERVICE_RESTART: xray service restarted for config update
+2024-01-15 00:30:00 - USER_ADD: username=david_brown, service=ssh, port=22, expire_date=2024-02-14
+2024-01-15 00:30:05 - SSH_USER_CREATED: Created user david_brown with password authentication
+2024-01-15 01:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 01:05:00 - MONITOR_CHECK: CPU=15%, RAM=48%, DISK=65% - All services running
+2024-01-15 01:10:00 - BANNER_UPDATE: SSH banner updated with current stats
+2024-01-15 01:15:00 - SPEEDTEST_INITIATED: Starting automatic speed test
+2024-01-15 01:15:45 - SPEEDTEST_COMPLETED: Download=245.5 Mbps, Upload=187.3 Mbps, Ping=28 ms
+2024-01-15 01:30:00 - BACKUP_STARTED: Starting automatic daily backup
+2024-01-15 01:30:25 - BACKUP_COMPLETED: Backup created successfully, size=15.7MB
+2024-01-15 02:00:00 - BACKUP_STARTED: Starting scheduled daily backup
+2024-01-15 02:00:30 - BACKUP_COMPLETED: Backup created successfully, size=16.2MB
+2024-01-15 02:05:00 - MONITOR_CHECK: CPU=8%, RAM=42%, DISK=65% - All services running
+2024-01-15 03:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 04:00:00 - USER_CONNECTION: username=john_doe, service=vmess, action=connected
+2024-01-15 04:15:00 - USER_CONNECTION: username=alice_smith, service=vless, action=connected
+2024-01-15 05:00:00 - MONITOR_CHECK: CPU=22%, RAM=51%, DISK=65% - All services running
+2024-01-15 05:30:00 - USER_CONNECTION: username=john_doe, service=vmess, action=disconnected
+2024-01-15 06:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 06:05:00 - MONITOR_CHECK: CPU=18%, RAM=49%, DISK=65% - All services running
+2024-01-15 07:00:00 - BANNER_UPDATE: SSH banner updated with current stats
+2024-01-15 08:00:00 - USER_ADD: username=emma_wilson, service=websocket, port=2082, expire_date=2024-02-14
+2024-01-15 08:00:05 - XRAY_CONFIG_UPDATE: Added user emma_wilson to websocket inbound
+2024-01-15 08:00:10 - SERVICE_RESTART: xray service restarted for config update
+2024-01-15 08:30:00 - USER_CONNECTION: username=emma_wilson, service=websocket, action=connected
+2024-01-15 09:00:00 - MONITOR_CHECK: CPU=25%, RAM=53%, DISK=65% - All services running
+2024-01-15 10:00:00 - MULTI_LOGIN_CHECK: User david_brown has 3 sessions, killing 1 session
+2024-01-15 10:00:01 - MULTI_LOGIN_KILL: Killed session PID 2847 for user david_brown
+2024-01-15 10:05:00 - MONITOR_CHECK: CPU=21%, RAM=52%, DISK=65% - All services running
+2024-01-15 11:00:00 - USER_RENEW: username=john_doe, service=vmess, new_expire_date=2024-03-14
+2024-01-15 11:30:00 - DOMAIN_UPDATE: Domain example.com pointed to server IP
+2024-01-15 12:00:00 - MONITOR_CHECK: CPU=28%, RAM=55%, DISK=65% - All services running
+2024-01-15 12:05:00 - SSL_CHECK: SSL certificate valid for 89 days
+2024-01-15 13:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 14:00:00 - USER_DELETE: username=carol_davis, service=shadowsocks
+2024-01-15 14:00:05 - XRAY_CONFIG_UPDATE: Removed user carol_davis from shadowsocks inbound
+2024-01-15 14:00:10 - SERVICE_RESTART: xray service restarted for config update
+2024-01-15 14:30:00 - THEME_UPDATE: Theme changed from default to blue
+2024-01-15 15:00:00 - MONITOR_CHECK: CPU=19%, RAM=50%, DISK=65% - All services running
+2024-01-15 16:00:00 - SPEEDTEST_INITIATED: Manual speed test initiated
+2024-01-15 16:00:52 - SPEEDTEST_COMPLETED: Download=267.8 Mbps, Upload=195.4 Mbps, Ping=25 ms
+2024-01-15 17:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 18:00:00 - MONITOR_CHECK: CPU=32%, RAM=58%, DISK=65% - All services running
+2024-01-15 18:30:00 - USER_CONNECTION: username=bob_wilson, service=trojan, action=connected
+2024-01-15 19:00:00 - BACKUP_STARTED: Manual backup initiated
+2024-01-15 19:00:18 - BACKUP_COMPLETED: Manual backup created successfully, size=17.1MB
+2024-01-15 20:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 21:00:00 - MONITOR_CHECK: CPU=26%, RAM=54%, DISK=65% - All services running
+2024-01-15 22:00:00 - USER_STATS: Active users - SSH: 1, VMESS: 2, VLESS: 1, TROJAN: 1, SHADOWSOCKS: 0, WEBSOCKET: 1
+2024-01-15 23:00:00 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-15 23:30:00 - SYSTEM_HEALTH_CHECK: All systems normal - CPU=14%, RAM=47%, DISK=65%
+2024-01-15 23:45:00 - CLEANUP_TEMP: Cleaned 45.2MB of temporary files
+2024-01-16 00:00:00 - DAILY_SUMMARY: Total users=6, Active connections=5, System uptime=24 hours
+2024-01-16 00:00:01 - MULTI_LOGIN_CHECK: No multi-login sessions found
+2024-01-16 00:05:00 - MONITOR_CHECK: CPU=11%, RAM=44%, DISK=65% - All services running
