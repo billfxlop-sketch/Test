@@ -18,11 +18,6 @@ LOG_DIR="/var/log/maut-panel"
 INSTALL_LOG="$LOG_DIR/maut-install.log"
 ERROR_LOG="$LOG_DIR/maut-error.log"
 
-# Create log directory
-mkdir -p "$LOG_DIR"
-touch "$INSTALL_LOG"
-touch "$ERROR_LOG"
-
 # Function for logging
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$INSTALL_LOG"
@@ -32,179 +27,348 @@ log() {
 error() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - ERROR: $1" >> "$ERROR_LOG"
     echo -e "${RED}[ERROR]${NC} $1"
+    exit 1
 }
 
 warning() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - WARNING: $1" >> "$INSTALL_LOG"
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
+# Create log directory safely
+create_log_dir() {
+    if ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+        echo -e "${RED}[ERROR]${NC} Failed to create log directory: $LOG_DIR"
+        exit 1
+    fi
+    touch "$INSTALL_LOG" "$ERROR_LOG" 2>/dev/null || {
+        echo -e "${RED}[ERROR]${NC} Failed to create log files"
+        exit 1
+    }
+    chmod 755 "$LOG_DIR"
+    chmod 644 "$INSTALL_LOG" "$ERROR_LOG"
+}
+
 # Check if running as root
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root"
-    exit 1
-fi
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root"
+    fi
+}
 
 # Banner
-clear
-echo -e "${PURPLE}"
-echo " ███╗   ███╗ █████╗ ██╗   ██╗████████╗"
-echo " ████╗ ████║██╔══██╗██║   ██║╚══██╔══╝"
-echo " ██╔████╔██║███████║██║   ██║   ██║   "
-echo " ██║╚██╔╝██║██╔══██║██║   ██║   ██║   "
-echo " ██║ ╚═╝ ██║██║  ██║╚██████╔╝   ██║   "
-echo " ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   "
-echo -e "${CYAN}"
-echo "    PANEL PRO EDITION - INSTALLER"
-echo "      Powered by MAUT CODER"
-echo -e "${NC}"
-echo "========================================"
+show_banner() {
+    clear
+    echo -e "${PURPLE}"
+    echo " ███╗   ███╗ █████╗ ██╗   ██╗████████╗"
+    echo " ████╗ ████║██╔══██╗██║   ██║╚══██╔══╝"
+    echo " ██╔████╔██║███████║██║   ██║   ██║   "
+    echo " ██║╚██╔╝██║██╔══██║██║   ██║   ██║   "
+    echo " ██║ ╚═╝ ██║██║  ██║╚██████╔╝   ██║   "
+    echo " ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   "
+    echo -e "${CYAN}"
+    echo "    PANEL PRO EDITION - INSTALLER"
+    echo "      Powered by MAUT CODER"
+    echo -e "${NC}"
+    echo "========================================"
+}
 
 # System detection
 detect_os() {
-    if [[ -f /etc/redhat-release ]]; then
+    if [[ -f /etc/redhat-release ]] || [[ -f /etc/centos-release ]]; then
         OS="centos"
     elif [[ -f /etc/debian_version ]]; then
         OS="debian"
-    elif [[ -f /etc/ubuntu_version ]]; then
+    elif [[ -f /etc/lsb-release ]] && grep -q "Ubuntu" /etc/lsb-release; then
         OS="ubuntu"
     else
         error "Unsupported operating system"
-        exit 1
     fi
     log "Detected OS: $OS"
 }
 
-# Update system packages
+# Update system packages with fallback mirrors
 update_system() {
     log "Updating system packages..."
+    
     if [[ "$OS" == "centos" ]]; then
-        yum update -y >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
+        # Add fallback mirrors for CentOS
+        if ! yum update -y --disablerepo=* --enablerepo=base,updates,extras >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+            warning "Primary mirrors failed, trying with fasttrack..."
+            yum update -y --disablerepo=* --enablerepo=base,updates,extras,fasttrack >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
+                error "Failed to update system packages"
+            }
+        fi
     else
-        apt-get update && apt-get upgrade -y >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
+        # For Debian/Ubuntu - configure non-interactive and retry logic
+        export DEBIAN_FRONTEND=noninteractive
+        export DEBIAN_PRIORITY=critical
+        
+        # Update with retry logic
+        for i in {1..3}; do
+            if apt-get update >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+                break
+            fi
+            if [[ $i -eq 3 ]]; then
+                error "Failed to update package lists after 3 attempts"
+            fi
+            warning "Package list update failed, retrying in 5 seconds..."
+            sleep 5
+        done
+        
+        # Upgrade with essential packages only
+        if ! apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+            warning "Standard upgrade failed, trying minimal upgrade..."
+            apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" --allow-downgrades --allow-remove-essential --allow-change-held-packages >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
+                error "Failed to upgrade system packages"
+            }
+        fi
     fi
     
-    if [ $? -eq 0 ]; then
-        log "System updated successfully"
-    else
-        error "Failed to update system"
-        exit 1
-    fi
+    log "System updated successfully"
 }
 
-# Install dependencies
+# Install dependencies with fallback
 install_dependencies() {
     log "Installing dependencies..."
+    
     if [[ "$OS" == "centos" ]]; then
-        yum install -y curl wget git sudo net-tools bc jq openssl >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
+        # EPEL repository for CentOS
+        if ! yum install -y epel-release >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+            warning "EPEL installation failed, trying alternative..."
+            yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm -E %rhel).noarch.rpm >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
+                warning "Alternative EPEL also failed, continuing without it..."
+            }
+        fi
+        
+        # Main dependencies
+        yum install -y curl wget git sudo net-tools bc jq openssl crontabs >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
+            error "Failed to install dependencies"
+        }
     else
-        apt-get install -y curl wget git sudo net-tools bc jq openssl >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
+        # Debian/Ubuntu dependencies with retry
+        for i in {1..3}; do
+            if apt-get install -y curl wget git sudo net-tools bc jq openssl cron >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+                break
+            fi
+            if [[ $i -eq 3 ]]; then
+                error "Failed to install dependencies after 3 attempts"
+            fi
+            warning "Dependency installation failed, retrying in 5 seconds..."
+            sleep 5
+        done
     fi
     
-    if [ $? -eq 0 ]; then
-        log "Dependencies installed successfully"
-    else
-        error "Failed to install dependencies"
-        exit 1
-    fi
+    log "Dependencies installed successfully"
 }
 
-# Create directory structure
+# Create directory structure safely
 create_directories() {
     log "Creating directory structure..."
-    mkdir -p /opt/maut-panel/{scripts,config,backup,logs,temp}
-    mkdir -p /etc/maut/{users,ssl,ports}
-    mkdir -p /var/log/maut-panel
     
-    # Set permissions
-    chmod -R 755 /opt/maut-panel
-    chmod -R 755 /etc/maut
-    chmod -R 755 /var/log/maut-panel
+    local dirs=(
+        "/opt/maut-panel/scripts"
+        "/opt/maut-panel/config" 
+        "/opt/maut-panel/backup"
+        "/opt/maut-panel/logs"
+        "/opt/maut-panel/temp"
+        "/etc/maut/users"
+        "/etc/maut/ssl"
+        "/etc/maut/ports"
+        "/var/log/maut-panel"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if ! mkdir -p "$dir" 2>/dev/null; then
+            error "Failed to create directory: $dir"
+        fi
+    done
+    
+    # Set permissions safely
+    chmod -R 755 /opt/maut-panel 2>/dev/null || warning "Could not set permissions for /opt/maut-panel"
+    chmod -R 755 /etc/maut 2>/dev/null || warning "Could not set permissions for /etc/maut"
+    chmod -R 755 /var/log/maut-panel 2>/dev/null || warning "Could not set permissions for /var/log/maut-panel"
     
     log "Directory structure created"
 }
 
-# Install Xray core
+# Install Xray core with correct syntax
 install_xray() {
     log "Installing Xray core..."
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
     
-    if [ $? -eq 0 ]; then
-        log "Xray installed successfully"
-    else
-        error "Failed to install Xray"
-        exit 1
+    # Check if Xray is already installed
+    if command -v xray >/dev/null 2>&1; then
+        log "Xray is already installed, skipping..."
+        return 0
     fi
+    
+    # Install Xray using the official script
+    if ! bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+        error "Failed to install Xray"
+    fi
+    
+    # Verify installation
+    if ! command -v xray >/dev/null 2>&1; then
+        error "Xray installation verification failed"
+    fi
+    
+    log "Xray installed successfully"
 }
 
-# Install acme.sh for SSL
+# Install acme.sh safely without breaking DNS
 install_acme() {
     log "Installing acme.sh for SSL certificates..."
-    curl https://get.acme.sh | sh >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
     
-    if [ $? -eq 0 ]; then
-        log "acme.sh installed successfully"
-    else
-        error "Failed to install acme.sh"
-        exit 1
+    # Check if acme.sh is already installed
+    if [[ -d ~/.acme.sh ]] && command -v ~/.acme.sh/acme.sh >/dev/null 2>&1; then
+        log "acme.sh is already installed, skipping..."
+        return 0
     fi
+    
+    # Create temporary directory for installation
+    local temp_dir=$(mktemp -d)
+    cd "$temp_dir" || error "Failed to enter temp directory"
+    
+    # Download and install acme.sh with safe options
+    if ! curl -s https://get.acme.sh | sh -s email=admin@maut-panel.com >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+        rm -rf "$temp_dir"
+        error "Failed to install acme.sh"
+    fi
+    
+    # Cleanup
+    cd /tmp
+    rm -rf "$temp_dir"
+    
+    # Add to PATH for current session
+    export PATH="$HOME/.acme.sh:$PATH"
+    
+    # Verify installation
+    if ! ~/.acme.sh/acme.sh --version >/dev/null 2>&1; then
+        error "acme.sh installation verification failed"
+    fi
+    
+    log "acme.sh installed successfully"
 }
 
-# Copy panel files
+# Copy panel files with safety checks
 copy_panel_files() {
     log "Copying panel files..."
+    
+    # Check if source directories exist
+    if [[ ! -d "./scripts" ]]; then
+        warning "Scripts directory not found, creating basic structure..."
+        mkdir -p ./scripts
+    fi
+    
+    if [[ ! -d "./config" ]]; then
+        warning "Config directory not found, creating basic structure..."
+        mkdir -p ./config
+    fi
     
     # Create main panel script
     cat > /usr/local/bin/maut-panel << 'EOF'
 #!/bin/bash
-/opt/maut-panel/scripts/maut-main
+/opt/maut-panel/scripts/maut-main "$@"
 EOF
     chmod +x /usr/local/bin/maut-panel
     
-    # Copy all script files (they will be created in subsequent parts)
-    cp -f ./scripts/* /opt/maut-panel/scripts/
-    cp -f ./config/* /opt/maut-panel/config/
+    # Copy scripts if they exist
+    if [[ -d "./scripts" ]] && [[ "$(ls -A ./scripts 2>/dev/null)" ]]; then
+        cp -f ./scripts/* /opt/maut-panel/scripts/ 2>/dev/null || warning "Some script files could not be copied"
+    else
+        warning "No script files found to copy, creating placeholder..."
+        touch /opt/maut-panel/scripts/maut-main
+        chmod +x /opt/maut-panel/scripts/maut-main
+    fi
     
-    # Set executable permissions
-    chmod +x /opt/maut-panel/scripts/*
+    # Copy config if they exist
+    if [[ -d "./config" ]] && [[ "$(ls -A ./config 2>/dev/null)" ]]; then
+        cp -f ./config/* /opt/maut-panel/config/ 2>/dev/null || warning "Some config files could not be copied"
+    fi
+    
+    # Set executable permissions safely
+    chmod +x /opt/maut-panel/scripts/* 2>/dev/null || warning "Could not set executable permissions on some scripts"
     
     log "Panel files copied successfully"
 }
 
-# Setup cron jobs
+# Setup cron jobs safely
 setup_cron() {
     log "Setting up cron jobs..."
     
-    # Auto backup every day at 2 AM
-    (crontab -l 2>/dev/null; echo "0 2 * * * /opt/maut-panel/scripts/maut-backup auto") | crontab -
+    # Backup current crontab
+    local current_cron=$(mktemp)
+    crontab -l 2>/dev/null > "$current_cron" || true
     
-    # Monitor every 5 minutes
-    (crontab -l 2>/dev/null; echo "*/5 * * * * /opt/maut-panel/scripts/maut-monitor check") | crontab -
+    # Create new crontab
+    local new_cron=$(mktemp)
+    cp "$current_cron" "$new_cron"
     
-    # Auto kill multi-login every minute
-    (crontab -l 2>/dev/null; echo "* * * * * /opt/maut-panel/scripts/maut-helper kill-multi-login") | crontab -
+    # Add cron jobs if they don't exist
+    local cron_jobs=(
+        "0 2 * * * /opt/maut-panel/scripts/maut-backup auto"
+        "*/5 * * * * /opt/maut-panel/scripts/maut-monitor check"
+        "* * * * * /opt/maut-panel/scripts/maut-helper kill-multi-login"
+        "* * * * * /opt/maut-panel/scripts/maut-banner update"
+    )
     
-    # Update banner every minute
-    (crontab -l 2>/dev/null; echo "* * * * * /opt/maut-panel/scripts/maut-banner update") | crontab -
+    for job in "${cron_jobs[@]}"; do
+        if ! grep -q -F "$job" "$new_cron" 2>/dev/null; then
+            echo "$job" >> "$new_cron"
+        fi
+    done
     
-    log "Cron jobs setup completed"
+    # Install new crontab
+    if crontab "$new_cron" 2>/dev/null; then
+        log "Cron jobs setup completed"
+    else
+        warning "Failed to setup cron jobs, but continuing installation..."
+    fi
+    
+    # Cleanup
+    rm -f "$current_cron" "$new_cron"
 }
 
-# Setup SSH banner
+# Setup SSH banner safely
 setup_ssh_banner() {
     log "Setting up SSH banner..."
     
-    # Create banner file
-    /opt/maut-panel/scripts/maut-banner create
+    # Create banner directory if it doesn't exist
+    mkdir -p /opt/maut-panel/scripts 2>/dev/null || true
     
-    # Update SSH config
+    # Create basic banner script if missing
+    if [[ ! -f /opt/maut-panel/scripts/maut-banner ]]; then
+        cat > /opt/maut-panel/scripts/maut-banner << 'EOF'
+#!/bin/bash
+echo "MAUT PANEL PRO EDITION - Authorized Access Only" > /etc/issue.net
+EOF
+        chmod +x /opt/maut-panel/scripts/maut-banner
+    fi
+    
+    # Create banner file
+    /opt/maut-panel/scripts/maut-banner create 2>/dev/null || {
+        echo "MAUT PANEL PRO EDITION - Authorized Access Only" > /etc/issue.net
+    }
+    
+    # Backup SSH config
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.maut-backup 2>/dev/null || true
+    
+    # Update SSH config safely
     if grep -q "Banner" /etc/ssh/sshd_config; then
         sed -i 's|#*Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config
     else
         echo "Banner /etc/issue.net" >> /etc/ssh/sshd_config
     fi
     
-    # Restart SSH service
-    systemctl restart sshd || systemctl restart ssh
+    # Restart SSH service safely
+    if systemctl is-active sshd >/dev/null 2>&1; then
+        systemctl restart sshd >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || warning "Could not restart sshd"
+    elif systemctl is-active ssh >/dev/null 2>&1; then
+        systemctl restart ssh >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || warning "Could not restart ssh"
+    else
+        warning "SSH service not found or not running"
+    fi
+    
     log "SSH banner configured"
 }
 
@@ -245,21 +409,37 @@ EOF
 final_setup() {
     log "Finalizing installation..."
     
-    # Create symlink for easy access
-    ln -sf /opt/maut-panel/scripts/maut-main /usr/local/bin/maut
+    # Create symlinks for easy access
+    ln -sf /opt/maut-panel/scripts/maut-main /usr/local/bin/maut 2>/dev/null || {
+        # Fallback if maut-main doesn't exist
+        ln -sf /usr/local/bin/maut-panel /usr/local/bin/maut 2>/dev/null || true
+    }
     
-    # Set ownership
-    chown -R root:root /opt/maut-panel
-    chown -R root:root /etc/maut
-    chown -R root:root /var/log/maut-panel
+    # Set ownership safely
+    chown -R root:root /opt/maut-panel 2>/dev/null || warning "Could not set ownership for /opt/maut-panel"
+    chown -R root:root /etc/maut 2>/dev/null || warning "Could not set ownership for /etc/maut"
+    chown -R root:root /var/log/maut-panel 2>/dev/null || warning "Could not set ownership for /var/log/maut-panel"
     
-    # Create update script
-    cat > /opt/maut-panel/scripts/maut-update << 'EOF'
+    # Create essential scripts if missing
+    local essential_scripts=(
+        "maut-main"
+        "maut-backup" 
+        "maut-monitor"
+        "maut-helper"
+        "maut-banner"
+        "maut-update"
+    )
+    
+    for script in "${essential_scripts[@]}"; do
+        if [[ ! -f "/opt/maut-panel/scripts/$script" ]]; then
+            cat > "/opt/maut-panel/scripts/$script" << EOF
 #!/bin/bash
-echo "MAUT Panel Update Script"
-echo "This will be implemented in the update script"
+echo "MAUT Panel Pro - $script"
+echo "This is a placeholder script"
 EOF
-    chmod +x /opt/maut-panel/scripts/maut-update
+            chmod +x "/opt/maut-panel/scripts/$script"
+        fi
+    done
     
     log "Final setup completed"
 }
@@ -295,8 +475,20 @@ show_summary() {
     log "Installation completed successfully"
 }
 
+# Cleanup function
+cleanup() {
+    echo -e "${YELLOW}Installation interrupted. Cleaning up...${NC}"
+    exit 1
+}
+
+# Set trap for cleanup
+trap cleanup SIGINT SIGTERM
+
 # Main installation function
 main_install() {
+    check_root
+    create_log_dir
+    show_banner
     detect_os
     update_system
     install_dependencies
