@@ -1,0 +1,103 @@
+# MAUT PANEL PRO - BANNER CONFIGURATION
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Banner Display Settings
+BANNER_ENABLED=true
+BANNER_TYPE="gradient"
+BANNER_UPDATE_INTERVAL=60
+
+# ASCII Art Settings
+ASCII_ART_ENABLED=true
+ASCII_ART_STYLE="default"
+ASCII_COLOR_SCHEME="gradient"
+
+# System Information Display
+SHOW_SYSTEM_INFO=true
+SHOW_CPU_USAGE=true
+SHOW_MEMORY_USAGE=true
+SHOW_DISK_USAGE=true
+SHOW_UPTIME=true
+SHOW_LOAD_AVERAGE=true
+
+# Service Status Display
+SHOW_SERVICE_STATUS=true
+SHOW_XRAY_STATUS=true
+SHOW_SSH_STATUS=true
+SHOW_SSL_STATUS=true
+
+# User Information
+SHOW_ONLINE_USERS=true
+SHOW_TOTAL_USERS=true
+SHOW_ACTIVE_CONNECTIONS=true
+
+# Network Information
+SHOW_PUBLIC_IP=true
+SHOW_LOCAL_IP=true
+SHOW_BANDWIDTH_USAGE=true
+
+# Color Settings for Banner
+BANNER_TITLE_COLOR="\033[1;36m"
+BANNER_BORDER_COLOR="\033[1;35m"
+BANNER_TEXT_COLOR="\033[1;37m"
+BANNER_STATS_COLOR="\033[1;33m"
+BANNER_SUCCESS_COLOR="\033[1;32m"
+BANNER_WARNING_COLOR="\033[1;31m"
+BANNER_RESET_COLOR="\033[0m"
+
+# Gradient Color Sequences
+GRADIENT_COLORS=("\033[1;35m" "\033[1;36m" "\033[1;34m" "\033[1;32m" "\033[1;33m")
+GRADIENT_SPEED=1
+
+# Custom Message
+CUSTOM_MESSAGE_ENABLED=true
+CUSTOM_MESSAGE="Welcome to MAUT PANEL PRO - Powered by MAUT CODER"
+CUSTOM_MESSAGE_COLOR="\033[1;36m"
+
+# Security Information
+SHOW_SECURITY_INFO=true
+SHOW_FAILED_LOGIN_ATTEMPTS=true
+SHOW_LAST_UPDATE=true
+
+# Date and Time Format
+DATE_FORMAT="+%Y-%m-%d"
+TIME_FORMAT="+%H:%M:%S"
+TIMEZONE="UTC"
+
+# Service Check Timeout
+SERVICE_CHECK_TIMEOUT=5
+
+# Maximum Display Length
+MAX_DISPLAY_LENGTH=80
+
+# Auto Refresh
+AUTO_REFRESH_ENABLED=true
+AUTO_REFRESH_INTERVAL=30
+
+# Logging for Banner
+BANNER_LOG_ENABLED=false
+BANNER_LOG_PATH="/var/log/maut-panel/banner.log"
+
+# SSH Banner Specific
+SSH_BANNER_ENABLED=true
+SSH_BANNER_FILE="/etc/issue.net"
+SSH_BANNER_UPDATE_CRON="* * * * *"
+
+# Notification Settings
+BANNER_NOTIFICATIONS_ENABLED=false
+NOTIFICATION_THRESHOLD_CPU=80
+NOTIFICATION_THRESHOLD_RAM=85
+NOTIFICATION_THRESHOLD_DISK=90
+
+# Performance Monitoring
+MONITOR_PERFORMANCE=true
+PERFORMANCE_CHECK_INTERVAL=60
+
+# Custom ASCII Art
+CUSTOM_ASCII_ART_ENABLED=false
+CUSTOM_ASCII_ART_PATH="/opt/maut-panel/config/custom_ascii.txt"
+
+# Version Information
+BANNER_CONFIG_VERSION="1.0"
+LAST_MODIFIED="$(date +%Y-%m-%d)"
+CONFIG_AUTHOR="@maut_coder"
