@@ -1,0 +1,521 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - NETWORK TOOLS MANAGER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_action() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - NETWORK: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Get network information
+show_network_info() {
+    echo -e "${COLOR_INFO}Network Information${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Public IP
+    echo -e "${COLOR_SUCCESS}Public IP Address:${COLOR_RESET}"
+    local public_ip=$(curl -s ipv4.icanhazip.com)
+    echo -e "  IPv4: $public_ip"
+    
+    local public_ipv6=$(curl -s ipv6.icanhazip.com 2>/dev/null)
+    if [[ -n "$public_ipv6" ]]; then
+        echo -e "  IPv6: $public_ipv6"
+    fi
+    
+    # Network interfaces
+    echo -e "${COLOR_SUCCESS}Network Interfaces:${COLOR_RESET}"
+    ip addr show | grep -E "^[0-9]|inet " | while read line; do
+        if [[ $line =~ ^[0-9] ]]; then
+            interface=$(echo "$line" | awk -F: '{print $2}' | xargs)
+            echo -e "  Interface: $interface"
+        elif [[ $line =~ inet ]]; then
+            ip_info=$(echo "$line" | awk '{print $2}')
+            echo -e "    IP: $ip_info"
+        fi
+    done
+    
+    # Routing table
+    echo -e "${COLOR_SUCCESS}Routing Table:${COLOR_RESET}"
+    ip route | head -10
+    
+    # DNS information
+    echo -e "${COLOR_SUCCESS}DNS Configuration:${COLOR_RESET}"
+    cat /etc/resolv.conf | grep -v "^#" | while read line; do
+        echo -e "  $line"
+    done
+    
+    # Network statistics
+    echo -e "${COLOR_SUCCESS}Network Statistics:${COLOR_RESET}"
+    echo -e "  Active Connections: $(netstat -an | grep ESTABLISHED | wc -l)"
+    echo -e "  Listening Ports: $(netstat -tulpn | grep LISTEN | wc -l)"
+}
+
+# Port scanner
+port_scanner() {
+    echo -e "${COLOR_INFO}Port Scanner${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter target IP or hostname: " target
+    if [[ -z "$target" ]]; then
+        echo -e "${COLOR_ERROR}Target cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    read -p "Enter port range (e.g., 1-1000) or specific port: " port_range
+    if [[ -z "$port_range" ]]; then
+        port_range="1-1000"
+    fi
+    
+    echo -e "${COLOR_INFO}Scanning $target ports $port_range...${COLOR_RESET}"
+    echo ""
+    
+    # Check if nc (netcat) is available
+    if ! command -v nc &> /dev/null; then
+        echo -e "${COLOR_ERROR}netcat (nc) is required but not installed${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Parse port range
+    if [[ "$port_range" =~ ^[0-9]+$ ]]; then
+        # Single port
+        ports=("$port_range")
+    elif [[ "$port_range" =~ ^[0-9]+-[0-9]+$ ]]; then
+        # Port range
+        start_port=$(echo "$port_range" | cut -d'-' -f1)
+        end_port=$(echo "$port_range" | cut -d'-' -f2)
+        ports=($(seq "$start_port" "$end_port"))
+    else
+        echo -e "${COLOR_ERROR}Invalid port range format${COLOR_RESET}"
+        return 1
+    fi
+    
+    local open_ports=()
+    
+    for port in "${ports[@]}"; do
+        if nc -z -w 1 "$target" "$port" 2>/dev/null; then
+            echo -e "Port $port: ${COLOR_SUCCESS}OPEN${COLOR_RESET}"
+            open_ports+=("$port")
+        else
+            echo -e "Port $port: ${COLOR_ERROR}CLOSED${COLOR_RESET}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${COLOR_SUCCESS}Scan completed. Found ${#open_ports[@]} open ports${COLOR_RESET}"
+    log_action "Port scan: $target ports $port_range - ${#open_ports[@]} open"
+}
+
+# Ping test
+ping_test() {
+    echo -e "${COLOR_INFO}Ping Test${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter target IP or hostname: " target
+    if [[ -z "$target" ]]; then
+        echo -e "${COLOR_ERROR}Target cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    read -p "Enter number of packets (default: 4): " count
+    count=${count:-4}
+    
+    echo -e "${COLOR_INFO}Pinging $target with $count packets...${COLOR_RESET}"
+    echo ""
+    
+    if ping -c "$count" "$target" 2>/dev/null; then
+        echo -e "${COLOR_SUCCESS}Ping to $target successful${COLOR_RESET}"
+    else
+        echo -e "${COLOR_ERROR}Ping to $target failed${COLOR_RESET}"
+    fi
+    
+    log_action "Ping test: $target ($count packets)"
+}
+
+# Traceroute
+trace_route() {
+    echo -e "${COLOR_INFO}Traceroute${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter target IP or hostname: " target
+    if [[ -z "$target" ]]; then
+        echo -e "${COLOR_ERROR}Target cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    echo -e "${COLOR_INFO}Tracing route to $target...${COLOR_RESET}"
+    echo ""
+    
+    if command -v traceroute &> /dev/null; then
+        traceroute -m 15 "$target"
+    elif command -v tracepath &> /dev/null; then
+        tracepath "$target"
+    else
+        echo -e "${COLOR_ERROR}traceroute or tracepath not available${COLOR_RESET}"
+        return 1
+    fi
+    
+    log_action "Traceroute to: $target"
+}
+
+# Bandwidth monitoring
+bandwidth_monitor() {
+    echo -e "${COLOR_INFO}Bandwidth Monitoring${COLOR_RESET}"
+    echo ""
+    
+    echo "Select monitoring method:"
+    echo "1. Real-time iftop (requires iftop)"
+    echo "2. Interface statistics"
+    echo "3. Back to Menu"
+    
+    read -p "Enter choice (1-3): " choice
+    
+    case $choice in
+        1)
+            if command -v iftop &> /dev/null; then
+                echo -e "${COLOR_INFO}Starting iftop - Press Ctrl+C to stop${COLOR_RESET}"
+                iftop
+            else
+                echo -e "${COLOR_ERROR}iftop not installed${COLOR_RESET}"
+                echo -e "${COLOR_INFO}Install with: apt-get install iftop or yum install iftop${COLOR_RESET}"
+            fi
+            ;;
+        2)
+            show_interface_stats
+            ;;
+        3)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+}
+
+# Show interface statistics
+show_interface_stats() {
+    echo -e "${COLOR_INFO}Network Interface Statistics${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_SUCCESS}Interface Statistics:${COLOR_RESET}"
+    cat /proc/net/dev | grep -v lo | while read line; do
+        if [[ $line =~ : ]]; then
+            interface=$(echo "$line" | cut -d: -f1 | xargs)
+            data=$(echo "$line" | cut -d: -f2)
+            rx_bytes=$(echo "$data" | awk '{print $1}')
+            tx_bytes=$(echo "$data" | awk '{print $9}')
+            
+            # Convert to human readable
+            rx_human=$(numfmt --to=iec "$rx_bytes")
+            tx_human=$(numfmt --to=iec "$tx_bytes")
+            
+            echo -e "  $interface: RX: $rx_human, TX: $tx_human"
+        fi
+    done
+    
+    echo ""
+    echo -e "${COLOR_SUCCESS}Current Connections:${COLOR_RESET}"
+    netstat -tun | grep ESTABLISHED | wc -l
+    echo "established connections"
+    
+    echo ""
+    echo -e "${COLOR_SUCCESS}Listening Services:${COLOR_RESET}"
+    netstat -tulpn | grep LISTEN | head -10
+}
+
+# DNS lookup
+dns_lookup() {
+    echo -e "${COLOR_INFO}DNS Lookup${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter domain name: " domain
+    if [[ -z "$domain" ]]; then
+        echo -e "${COLOR_ERROR}Domain cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    echo -e "${COLOR_INFO}DNS records for $domain:${COLOR_RESET}"
+    echo ""
+    
+    # A records
+    echo -e "${COLOR_SUCCESS}A Records:${COLOR_RESET}"
+    dig +short "$domain" A
+    
+    # AAAA records
+    echo -e "${COLOR_SUCCESS}AAAA Records:${COLOR_RESET}"
+    dig +short "$domain" AAAA
+    
+    # MX records
+    echo -e "${COLOR_SUCCESS}MX Records:${COLOR_RESET}"
+    dig +short "$domain" MX
+    
+    # NS records
+    echo -e "${COLOR_SUCCESS}NS Records:${COLOR_RESET}"
+    dig +short "$domain" NS
+    
+    # TXT records
+    echo -e "${COLOR_SUCCESS}TXT Records:${COLOR_RESET}"
+    dig +short "$domain" TXT
+    
+    log_action "DNS lookup: $domain"
+}
+
+# Network speed test
+network_speed_test() {
+    echo -e "${COLOR_INFO}Network Speed Test${COLOR_RESET}"
+    echo ""
+    
+    echo "Select test type:"
+    echo "1. Download speed test"
+    echo "2. Upload speed test"
+    echo "3. Comprehensive test"
+    echo "4. Back to Menu"
+    
+    read -p "Enter choice (1-4): " choice
+    
+    case $choice in
+        1)
+            download_speed_test
+            ;;
+        2)
+            upload_speed_test
+            ;;
+        3)
+            comprehensive_speed_test
+            ;;
+        4)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+}
+
+# Download speed test
+download_speed_test() {
+    echo -e "${COLOR_INFO}Download Speed Test${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_INFO}Testing download speed...${COLOR_RESET}"
+    
+    # Create a test file and measure download time
+    local test_url="http://speedtest.ftp.otenet.gr/files/test1Mb.db"
+    
+    local start_time=$(date +%s)
+    if curl -o /dev/null -s -w "%{speed_download}\n" "$test_url"; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        
+        echo -e "${COLOR_SUCCESS}Download test completed in ${duration}s${COLOR_RESET}"
+    else
+        echo -e "${COLOR_ERROR}Download test failed${COLOR_RESET}"
+    fi
+    
+    log_action "Download speed test performed"
+}
+
+# Upload speed test (simplified)
+upload_speed_test() {
+    echo -e "${COLOR_INFO}Upload Speed Test${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}Note: This is a basic upload test${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Creating test data...${COLOR_RESET}"
+    
+    # Create a 1MB test file
+    dd if=/dev/zero of=/tmp/upload_test.bin bs=1M count=1 status=none
+    
+    echo -e "${COLOR_INFO}Testing upload speed...${COLOR_RESET}"
+    # This would normally upload to a server, but we'll simulate
+    local start_time=$(date +%s)
+    sleep 2  # Simulate upload time
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # Clean up
+    rm -f /tmp/upload_test.bin
+    
+    echo -e "${COLOR_SUCCESS}Upload test simulated - Duration: ${duration}s${COLOR_RESET}"
+    echo -e "${COLOR_INFO}For accurate upload testing, use the speedtest tool${COLOR_RESET}"
+    
+    log_action "Upload speed test performed"
+}
+
+# Comprehensive speed test
+comprehensive_speed_test() {
+    echo -e "${COLOR_INFO}Comprehensive Network Test${COLOR_RESET}"
+    echo ""
+    
+    # Test multiple endpoints
+    local endpoints=(
+        "Google DNS:8.8.8.8"
+        "Cloudflare DNS:1.1.1.1"
+        "Google:google.com"
+        "Cloudflare:cloudflare.com"
+    )
+    
+    echo -e "${COLOR_SUCCESS}Testing connectivity to various endpoints:${COLOR_RESET}"
+    echo ""
+    
+    for endpoint in "${endpoints[@]}"; do
+        local name="${endpoint%:*}"
+        local host="${endpoint#*:}"
+        
+        echo -n "Testing $name ($host)... "
+        
+        if ping -c 2 -W 1 "$host" &>/dev/null; then
+            echo -e "${COLOR_SUCCESS}✓ Reachable${COLOR_RESET}"
+            
+            # Test HTTP if applicable
+            if [[ "$name" != *"DNS"* ]]; then
+                echo -n "  HTTP test... "
+                if curl -s --head "http://$host" | head -1 | grep -q "HTTP"; then
+                    echo -e "${COLOR_SUCCESS}✓ HTTP OK${COLOR_RESET}"
+                else
+                    echo -e "${COLOR_WARNING}⚠ HTTP Failed${COLOR_RESET}"
+                fi
+                
+                echo -n "  HTTPS test... "
+                if curl -s --head "https://$host" | head -1 | grep -q "HTTP"; then
+                    echo -e "${COLOR_SUCCESS}✓ HTTPS OK${COLOR_RESET}"
+                else
+                    echo -e "${COLOR_WARNING}⚠ HTTPS Failed${COLOR_RESET}"
+                fi
+            fi
+        else
+            echo -e "${COLOR_ERROR}✗ Unreachable${COLOR_RESET}"
+        fi
+        echo ""
+    done
+    
+    log_action "Comprehensive network test performed"
+}
+
+# Firewall status check
+firewall_status() {
+    echo -e "${COLOR_INFO}Firewall Status${COLOR_RESET}"
+    echo ""
+    
+    # Check UFW
+    if command -v ufw &> /dev/null; then
+        echo -e "${COLOR_SUCCESS}UFW Status:${COLOR_RESET}"
+        ufw status verbose
+    else
+        echo -e "${COLOR_WARNING}UFW not installed${COLOR_RESET}"
+    fi
+    
+    echo ""
+    
+    # Check iptables
+    if command -v iptables &> /dev/null; then
+        echo -e "${COLOR_SUCCESS}IPTables Rules:${COLOR_RESET}"
+        iptables -L -n | head -20
+    else
+        echo -e "${COLOR_WARNING}IPTables not available${COLOR_RESET}"
+    fi
+    
+    echo ""
+    
+    # Check listening ports
+    echo -e "${COLOR_SUCCESS}Listening Ports:${COLOR_RESET}"
+    netstat -tulpn | grep LISTEN | while read line; do
+        local proto=$(echo "$line" | awk '{print $1}')
+        local address=$(echo "$line" | awk '{print $4}')
+        local program=$(echo "$line" | awk '{print $7}')
+        echo -e "  $address ($proto) - $program"
+    done | head -10
+}
+
+# Network menu
+show_network_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║           NETWORK TOOLS             ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Network diagnostics and monitoring tools${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Show basic network info
+    local public_ip=$(curl -s ipv4.icanhazip.com)
+    echo -e "${COLOR_SUCCESS}Public IP: $public_ip${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}Hostname: $(hostname)${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}NETWORK MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Network Information"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Port Scanner"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} Ping Test"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Traceroute"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Bandwidth Monitor"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} DNS Lookup"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Network Speed Test"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Firewall Status"
+    echo -e "${COLOR_SUCCESS}09${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main network function
+main() {
+    load_theme
+    
+    while true; do
+        show_network_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) show_network_info ;;
+            02) port_scanner ;;
+            03) ping_test ;;
+            04) trace_route ;;
+            05) bandwidth_monitor ;;
+            06) dns_lookup ;;
+            07) network_speed_test ;;
+            08) firewall_status ;;
+            09) 
+                log_action "Exited Network Tools"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

@@ -1,0 +1,540 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - DOMAIN & CLOUDFLARE MANAGER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+DOMAIN_CONFIG="$CONFIG_DIR/maut-domain.conf"
+CLOUDFLARE_CONFIG="$CONFIG_DIR/cloudflare.conf"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_action() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - DOMAIN: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Get server IP
+get_server_ip() {
+    curl -s ipv4.icanhazip.com
+}
+
+# Setup domain configuration
+setup_domain() {
+    echo -e "${COLOR_INFO}Setup Domain Configuration${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter your domain name (e.g., example.com): " domain
+    if [[ -z "$domain" ]]; then
+        echo -e "${COLOR_ERROR}Domain cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Validate domain format
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        echo -e "${COLOR_ERROR}Invalid domain format${COLOR_RESET}"
+        return 1
+    fi
+    
+    local server_ip=$(get_server_ip)
+    
+    echo -e "${COLOR_INFO}Server IP: $server_ip${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Please make sure your domain points to this IP${COLOR_RESET}"
+    echo ""
+    
+    # Test domain resolution
+    echo -e "${COLOR_INFO}Testing domain resolution...${COLOR_RESET}"
+    local domain_ip=$(dig +short "$domain" | head -1)
+    
+    if [[ -n "$domain_ip" ]]; then
+        echo -e "${COLOR_INFO}Domain $domain resolves to: $domain_ip${COLOR_RESET}"
+        if [[ "$domain_ip" == "$server_ip" ]]; then
+            echo -e "${COLOR_SUCCESS}✓ Domain is correctly pointing to this server${COLOR_RESET}"
+        else
+            echo -e "${COLOR_WARNING}⚠ Domain is not pointing to this server${COLOR_RESET}"
+            echo -e "${COLOR_INFO}Please update your DNS A record to point to: $server_ip${COLOR_RESET}"
+        fi
+    else
+        echo -e "${COLOR_WARNING}⚠ Domain does not resolve to any IP${COLOR_RESET}"
+    fi
+    
+    # Save domain configuration
+    save_domain_config "$domain" "$server_ip"
+    
+    # Setup SSL certificate
+    setup_domain_ssl "$domain"
+    
+    echo -e "${COLOR_SUCCESS}Domain configuration completed!${COLOR_RESET}"
+    log_action "Setup domain: $domain"
+}
+
+# Save domain configuration
+save_domain_config() {
+    local domain="$1"
+    local ip="$2"
+    
+    cat > "$DOMAIN_CONFIG" << EOF
+# MAUT PANEL PRO - Domain Configuration
+DOMAIN_MAIN="$domain"
+SERVER_IP="$ip"
+CONFIG_DATE="$(date '+%Y-%m-%d %H:%M:%S')"
+SSL_ENABLED="true"
+SSL_CERT="/etc/maut/ssl/cert.pem"
+SSL_KEY="/etc/maut/ssl/key.pem"
+EOF
+
+    echo -e "${COLOR_SUCCESS}Domain configuration saved: $DOMAIN_CONFIG${COLOR_RESET}"
+}
+
+# Setup SSL certificate for domain
+setup_domain_ssl() {
+    local domain="$1"
+    
+    echo -e "${COLOR_INFO}Setting up SSL certificate for $domain...${COLOR_RESET}"
+    
+    # Check if acme.sh is installed
+    if [[ ! -d "/root/.acme.sh" ]]; then
+        echo -e "${COLOR_WARNING}acme.sh not found, installing...${COLOR_RESET}"
+        install_acme_sh
+    fi
+    
+    # Stop Nginx if running (port 80 might be in use)
+    systemctl stop nginx 2>/dev/null
+    
+    # Issue certificate
+    echo -e "${COLOR_INFO}Issuing SSL certificate...${COLOR_RESET}"
+    /root/.acme.sh/acme.sh --issue -d "$domain" --standalone --keylength ec-256
+    
+    if [ $? -eq 0 ]; then
+        # Create SSL directory
+        mkdir -p /etc/maut/ssl
+        
+        # Install certificate
+        /root/.acme.sh/acme.sh --install-cert -d "$domain" \
+            --key-file /etc/maut/ssl/key.pem \
+            --fullchain-file /etc/maut/ssl/cert.pem \
+            --reloadcmd "systemctl reload xray"
+        
+        echo -e "${COLOR_SUCCESS}SSL certificate installed for $domain${COLOR_RESET}"
+        
+        # Update domain config
+        sed -i 's/SSL_ENABLED=".*"/SSL_ENABLED="true"/' "$DOMAIN_CONFIG"
+    else
+        echo -e "${COLOR_ERROR}Failed to issue SSL certificate${COLOR_RESET}"
+        echo -e "${COLOR_WARNING}Creating self-signed certificate instead${COLOR_RESET}"
+        create_self_signed_cert "$domain"
+        sed -i 's/SSL_ENABLED=".*"/SSL_ENABLED="false"/' "$DOMAIN_CONFIG"
+    fi
+    
+    # Restart Nginx if it was running
+    systemctl start nginx 2>/dev/null
+}
+
+# Install acme.sh
+install_acme_sh() {
+    echo -e "${COLOR_INFO}Installing acme.sh...${COLOR_RESET}"
+    curl https://get.acme.sh | sh
+    if [ $? -eq 0 ]; then
+        echo -e "${COLOR_SUCCESS}acme.sh installed successfully${COLOR_RESET}"
+    else
+        echo -e "${COLOR_ERROR}Failed to install acme.sh${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Create self-signed certificate
+create_self_signed_cert() {
+    local domain="$1"
+    
+    mkdir -p /etc/maut/ssl
+    
+    openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 \
+        -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain" \
+        -keyout /etc/maut/ssl/key.pem \
+        -out /etc/maut/ssl/cert.pem
+    
+    echo -e "${COLOR_SUCCESS}Self-signed certificate created for $domain${COLOR_RESET}"
+}
+
+# Setup Cloudflare configuration
+setup_cloudflare() {
+    echo -e "${COLOR_INFO}Setup Cloudflare Configuration${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter Cloudflare API Token: " cf_token
+    if [[ -z "$cf_token" ]]; then
+        echo -e "${COLOR_ERROR}API Token cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    read -p "Enter Cloudflare Zone ID: " cf_zone
+    if [[ -z "$cf_zone" ]]; then
+        echo -e "${COLOR_ERROR}Zone ID cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    read -p "Enter domain managed by Cloudflare: " cf_domain
+    if [[ -z "$cf_domain" ]]; then
+        echo -e "${COLOR_ERROR}Domain cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Test Cloudflare API connection
+    if test_cloudflare_api "$cf_token" "$cf_zone"; then
+        save_cloudflare_config "$cf_token" "$cf_zone" "$cf_domain"
+        echo -e "${COLOR_SUCCESS}Cloudflare configuration saved!${COLOR_RESET}"
+        log_action "Setup Cloudflare for domain: $cf_domain"
+    else
+        echo -e "${COLOR_ERROR}Failed to verify Cloudflare API connection${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Test Cloudflare API connection
+test_cloudflare_api() {
+    local token="$1"
+    local zone="$2"
+    
+    echo -e "${COLOR_INFO}Testing Cloudflare API connection...${COLOR_RESET}"
+    
+    local response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json")
+    
+    if echo "$response" | grep -q '"success":true'; then
+        echo -e "${COLOR_SUCCESS}✓ Cloudflare API connection successful${COLOR_RESET}"
+        return 0
+    else
+        echo -e "${COLOR_ERROR}✗ Cloudflare API connection failed${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Save Cloudflare configuration
+save_cloudflare_config() {
+    local token="$1"
+    local zone="$2"
+    local domain="$3"
+    
+    cat > "$CLOUDFLARE_CONFIG" << EOF
+# MAUT PANEL PRO - Cloudflare Configuration
+CLOUDFLARE_ENABLED="true"
+CF_API_TOKEN="$token"
+CF_ZONE_ID="$zone"
+CF_DOMAIN="$domain"
+CONFIG_DATE="$(date '+%Y-%m-%d %H:%M:%S')"
+EOF
+
+    echo -e "${COLOR_SUCCESS}Cloudflare configuration saved: $CLOUDFLARE_CONFIG${COLOR_RESET}"
+}
+
+# Update DNS record
+update_dns_record() {
+    echo -e "${COLOR_INFO}Update DNS Record${COLOR_RESET}"
+    echo ""
+    
+    if [[ ! -f "$CLOUDFLARE_CONFIG" ]]; then
+        echo -e "${COLOR_ERROR}Cloudflare configuration not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    source "$CLOUDFLARE_CONFIG"
+    
+    read -p "Enter subdomain (e.g., www or leave empty for main domain): " subdomain
+    read -p "Enter record type (A, CNAME, etc. - default: A): " record_type
+    record_type=${record_type:-A}
+    
+    read -p "Enter record value: " record_value
+    if [[ -z "$record_value" ]]; then
+        echo -e "${COLOR_ERROR}Record value cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    local full_domain="$subdomain.$CF_DOMAIN"
+    if [[ -z "$subdomain" ]]; then
+        full_domain="$CF_DOMAIN"
+    fi
+    
+    echo -e "${COLOR_INFO}Updating DNS record: $full_domain $record_type $record_value${COLOR_RESET}"
+    
+    # First, check if record exists
+    local record_id=$(get_dns_record_id "$full_domain" "$record_type")
+    
+    if [[ -n "$record_id" ]]; then
+        # Update existing record
+        update_existing_record "$record_id" "$full_domain" "$record_type" "$record_value"
+    else
+        # Create new record
+        create_new_record "$full_domain" "$record_type" "$record_value"
+    fi
+}
+
+# Get DNS record ID
+get_dns_record_id() {
+    local domain="$1"
+    local type="$2"
+    
+    curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?type=$type&name=$domain" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" | grep -o '"id":"[^"]*' | cut -d'"' -f4 | head -1
+}
+
+# Update existing DNS record
+update_existing_record() {
+    local record_id="$1"
+    local domain="$2"
+    local type="$3"
+    local value="$4"
+    
+    local data="{\"type\":\"$type\",\"name\":\"$domain\",\"content\":\"$value\",\"ttl\":1,\"proxied\":false}"
+    
+    local response=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$record_id" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "$data")
+    
+    if echo "$response" | grep -q '"success":true'; then
+        echo -e "${COLOR_SUCCESS}✓ DNS record updated successfully${COLOR_RESET}"
+        log_action "Updated DNS record: $domain $type $value"
+    else
+        echo -e "${COLOR_ERROR}✗ Failed to update DNS record${COLOR_RESET}"
+    fi
+}
+
+# Create new DNS record
+create_new_record() {
+    local domain="$1"
+    local type="$2"
+    local value="$3"
+    
+    local data="{\"type\":\"$type\",\"name\":\"$domain\",\"content\":\"$value\",\"ttl\":1,\"proxied\":false}"
+    
+    local response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "$data")
+    
+    if echo "$response" | grep -q '"success":true'; then
+        echo -e "${COLOR_SUCCESS}✓ DNS record created successfully${COLOR_RESET}"
+        log_action "Created DNS record: $domain $type $value"
+    else
+        echo -e "${COLOR_ERROR}✗ Failed to create DNS record${COLOR_RESET}"
+    fi
+}
+
+# Renew SSL certificate
+renew_ssl_certificate() {
+    echo -e "${COLOR_INFO}Renew SSL Certificate${COLOR_RESET}"
+    echo ""
+    
+    if [[ ! -f "$DOMAIN_CONFIG" ]]; then
+        echo -e "${COLOR_ERROR}Domain configuration not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    source "$DOMAIN_CONFIG"
+    
+    if [[ "$SSL_ENABLED" != "true" ]]; then
+        echo -e "${COLOR_WARNING}SSL is not enabled for this domain${COLOR_RESET}"
+        return 1
+    fi
+    
+    if [[ ! -d "/root/.acme.sh" ]]; then
+        echo -e "${COLOR_ERROR}acme.sh not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    echo -e "${COLOR_INFO}Renewing SSL certificate for $DOMAIN_MAIN...${COLOR_RESET}"
+    
+    # Stop Nginx if running
+    systemctl stop nginx 2>/dev/null
+    
+    # Renew certificate
+    /root/.acme.sh/acme.sh --renew -d "$DOMAIN_MAIN" --force
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${COLOR_SUCCESS}✓ SSL certificate renewed successfully${COLOR_RESET}"
+        log_action "Renewed SSL certificate for: $DOMAIN_MAIN"
+    else
+        echo -e "${COLOR_ERROR}✗ Failed to renew SSL certificate${COLOR_RESET}"
+    fi
+    
+    # Restart Nginx if it was running
+    systemctl start nginx 2>/dev/null
+}
+
+# Show domain information
+show_domain_info() {
+    echo -e "${COLOR_INFO}Domain Information${COLOR_RESET}"
+    echo ""
+    
+    local server_ip=$(get_server_ip)
+    echo -e "${COLOR_SUCCESS}Server IP:${COLOR_RESET} $server_ip"
+    echo ""
+    
+    if [[ -f "$DOMAIN_CONFIG" ]]; then
+        echo -e "${COLOR_SUCCESS}Domain Configuration:${COLOR_RESET}"
+        source "$DOMAIN_CONFIG"
+        echo -e "Main Domain: $DOMAIN_MAIN"
+        echo -e "SSL Enabled: $SSL_ENABLED"
+        echo -e "Config Date: $CONFIG_DATE"
+        
+        # Test domain resolution
+        echo ""
+        echo -e "${COLOR_INFO}DNS Resolution Test:${COLOR_RESET}"
+        local domain_ip=$(dig +short "$DOMAIN_MAIN" | head -1)
+        if [[ -n "$domain_ip" ]]; then
+            echo -e "Resolved IP: $domain_ip"
+            if [[ "$domain_ip" == "$server_ip" ]]; then
+                echo -e "${COLOR_SUCCESS}✓ DNS is correctly configured${COLOR_RESET}"
+            else
+                echo -e "${COLOR_WARNING}⚠ DNS points to different IP${COLOR_RESET}"
+            fi
+        else
+            echo -e "${COLOR_ERROR}✗ Domain does not resolve${COLOR_RESET}"
+        fi
+        
+        # Check SSL certificate
+        if [[ "$SSL_ENABLED" == "true" ]] && [[ -f "$SSL_CERT" ]]; then
+            echo ""
+            echo -e "${COLOR_SUCCESS}SSL Certificate:${COLOR_RESET}"
+            openssl x509 -in "$SSL_CERT" -noout -subject -dates 2>/dev/null | head -2
+        fi
+    else
+        echo -e "${COLOR_WARNING}No domain configuration found${COLOR_RESET}"
+    fi
+    
+    echo ""
+    
+    if [[ -f "$CLOUDFLARE_CONFIG" ]]; then
+        echo -e "${COLOR_SUCCESS}Cloudflare Configuration:${COLOR_RESET}"
+        source "$CLOUDFLARE_CONFIG"
+        echo -e "Cloudflare Enabled: $CLOUDFLARE_ENABLED"
+        echo -e "Managed Domain: $CF_DOMAIN"
+        echo -e "Config Date: $CONFIG_DATE"
+    else
+        echo -e "${COLOR_INFO}Cloudflare: Not configured${COLOR_RESET}"
+    fi
+}
+
+# Domain menu
+show_domain_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║      DOMAIN & CLOUDFLARE MANAGER    ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Manage domains, DNS, and Cloudflare configurations${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}DOMAIN MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Setup Domain"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Setup Cloudflare"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} Update DNS Record"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Renew SSL Certificate"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Show Domain Info"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Test Domain Resolution"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Test domain resolution
+test_domain_resolution() {
+    echo -e "${COLOR_INFO}Test Domain Resolution${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter domain to test: " domain
+    if [[ -z "$domain" ]]; then
+        echo -e "${COLOR_ERROR}Domain cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    local server_ip=$(get_server_ip)
+    
+    echo -e "${COLOR_INFO}Testing domain: $domain${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Server IP: $server_ip${COLOR_RESET}"
+    echo ""
+    
+    # Perform DNS lookup
+    echo -e "${COLOR_SUCCESS}DNS Lookup Results:${COLOR_RESET}"
+    dig +short "$domain" | while read ip; do
+        echo -e "IP: $ip"
+        if [[ "$ip" == "$server_ip" ]]; then
+            echo -e "${COLOR_SUCCESS}✓ This is your server IP${COLOR_RESET}"
+        else
+            echo -e "${COLOR_WARNING}⚠ Different from server IP${COLOR_RESET}"
+        fi
+    done
+    
+    # Test HTTP/HTTPS connectivity
+    echo ""
+    echo -e "${COLOR_SUCCESS}HTTP/HTTPS Tests:${COLOR_RESET}"
+    
+    for protocol in http https; do
+        local url="$protocol://$domain"
+        echo -n "Testing $url... "
+        
+        if curl -s --head --connect-timeout 5 "$url" | head -1 | grep -q "HTTP"; then
+            echo -e "${COLOR_SUCCESS}✓ Accessible${COLOR_RESET}"
+        else
+            echo -e "${COLOR_ERROR}✗ Not accessible${COLOR_RESET}"
+        fi
+    done
+}
+
+# Main domain function
+main() {
+    load_theme
+    
+    while true; do
+        show_domain_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) setup_domain ;;
+            02) setup_cloudflare ;;
+            03) update_dns_record ;;
+            04) renew_ssl_certificate ;;
+            05) show_domain_info ;;
+            06) test_domain_resolution ;;
+            07) 
+                log_action "Exited Domain Manager"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

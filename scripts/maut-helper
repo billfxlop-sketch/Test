@@ -1,0 +1,562 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - HELPER FUNCTIONS
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_helper() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - HELPER: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Auto kill multi-login users
+kill_multi_login() {
+    echo -e "${COLOR_INFO}Checking for multi-login users...${COLOR_RESET}"
+    
+    # Get current SSH connections
+    local connections=$(who | awk '{print $1, $5}' | sed 's/(//g' | sed 's/)//g')
+    
+    # Count connections per user
+    declare -A user_connections
+    
+    while read -r user ip; do
+        if [[ -n "$user" && -n "$ip" ]]; then
+            ((user_connections["$user"]++))
+        fi
+    done <<< "$connections"
+    
+    local killed_count=0
+    
+    # Kill sessions for users with more than 2 connections
+    for user in "${!user_connections[@]}"; do
+        local count=${user_connections["$user"]}
+        
+        if [[ $count -gt 2 ]]; then
+            echo -e "${COLOR_WARNING}User $user has $count connections - cleaning up...${COLOR_RESET}"
+            
+            # Get all PIDs for this user except the first 2
+            local pids=$(ps -u "$user" -o pid,cmd | grep sshd | awk '{print $1}' | tail -n +3)
+            
+            for pid in $pids; do
+                if kill -9 "$pid" 2>/dev/null; then
+                    echo -e "${COLOR_SUCCESS}Killed SSH session (PID: $pid) for user $user${COLOR_RESET}"
+                    ((killed_count++))
+                    log_helper "Killed multi-login session for $user (PID: $pid)"
+                fi
+            done
+        fi
+    done
+    
+    if [[ $killed_count -eq 0 ]]; then
+        echo -e "${COLOR_SUCCESS}No multi-login users found${COLOR_RESET}"
+    else
+        echo -e "${COLOR_SUCCESS}Cleaned up $killed_count multi-login sessions${COLOR_RESET}"
+    fi
+}
+
+# System cleanup
+system_cleanup() {
+    echo -e "${COLOR_INFO}Performing system cleanup...${COLOR_RESET}"
+    
+    local freed_space=0
+    
+    # Clean package cache
+    if command -v apt-get &> /dev/null; then
+        echo -e "${COLOR_INFO}Cleaning APT cache...${COLOR_RESET}"
+        apt-get clean
+        freed_space=$((freed_space + $(du -s /var/cache/apt/ | awk '{print $1}')))
+    elif command -v yum &> /dev/null; then
+        echo -e "${COLOR_INFO}Cleaning YUM cache...${COLOR_RESET}"
+        yum clean all
+    fi
+    
+    # Clean temporary files
+    echo -e "${COLOR_INFO}Cleaning temporary files...${COLOR_RESET}"
+    rm -rf /tmp/*
+    rm -rf /var/tmp/*
+    
+    # Clean log files (keep current ones)
+    echo -e "${COLOR_INFO}Rotating log files...${COLOR_RESET}"
+    logrotate -f /etc/logrotate.conf 2>/dev/null
+    
+    # Clean backup files older than 30 days
+    echo -e "${COLOR_INFO}Cleaning old backups...${COLOR_RESET}"
+    find "$PANEL_DIR/backup" -name "*.tar.gz" -mtime +30 -delete 2>/dev/null
+    
+    # Clean expired user accounts
+    cleanup_expired_users
+    
+    echo -e "${COLOR_SUCCESS}System cleanup completed!${COLOR_RESET}"
+    log_helper "Performed system cleanup"
+}
+
+# Cleanup expired users
+cleanup_expired_users() {
+    echo -e "${COLOR_INFO}Cleaning up expired users...${COLOR_RESET}"
+    
+    local current_date=$(date '+%Y-%m-%d')
+    local user_db="$CONFIG_DIR/maut-users.db"
+    local cleanup_count=0
+    
+    if [[ ! -f "$user_db" ]]; then
+        echo -e "${COLOR_WARNING}No user database found${COLOR_RESET}"
+        return
+    fi
+    
+    # Create backup of user database
+    cp "$user_db" "$user_db.backup.$(date +%s)"
+    
+    # Process each user line
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
+            echo "$line"
+            continue
+        fi
+        
+        local service=$(echo "$line" | cut -d'|' -f1)
+        local username=$(echo "$line" | cut -d'|' -f2)
+        local expiry=$(echo "$line" | cut -d'|' -f6)
+        local status=$(echo "$line" | cut -d'|' -f8)
+        
+        # Check if user is expired
+        if [[ "$expiry" < "$current_date" ]] && [[ "$status" == "active" ]]; then
+            echo -e "${COLOR_WARNING}Removing expired user: $username (Expired: $expiry)${COLOR_RESET}"
+            
+            # Remove system user for SSH
+            if [[ "$service" == "ssh" ]]; then
+                userdel -r "$username" 2>/dev/null
+            fi
+            
+            # Update status to expired
+            echo "$line" | sed "s/|active$/|expired/"
+            ((cleanup_count++))
+            log_helper "Cleaned up expired user: $username"
+        else
+            echo "$line"
+        fi
+    done < "$user_db" > "$user_db.tmp"
+    
+    mv "$user_db.tmp" "$user_db"
+    
+    if [[ $cleanup_count -eq 0 ]]; then
+        echo -e "${COLOR_SUCCESS}No expired users found${COLOR_RESET}"
+    else
+        echo -e "${COLOR_SUCCESS}Cleaned up $cleanup_count expired users${COLOR_RESET}"
+    fi
+}
+
+# System health check
+system_health_check() {
+    echo -e "${COLOR_INFO}Performing system health check...${COLOR_RESET}"
+    echo ""
+    
+    local issues=0
+    local warnings=0
+    
+    # Check disk space
+    local disk_usage=$(df / -h | awk 'NR==2 {print $5}' | tr -d '%')
+    if [[ $disk_usage -gt 90 ]]; then
+        echo -e "${COLOR_ERROR}✗ High disk usage: ${disk_usage}%${COLOR_RESET}"
+        ((issues++))
+    elif [[ $disk_usage -gt 80 ]]; then
+        echo -e "${COLOR_WARNING}⚠ Disk usage getting high: ${disk_usage}%${COLOR_RESET}"
+        ((warnings++))
+    else
+        echo -e "${COLOR_SUCCESS}✓ Disk usage: ${disk_usage}%${COLOR_RESET}"
+    fi
+    
+    # Check memory usage
+    local mem_usage=$(free | grep Mem | awk '{printf "%.0f", $3/$2 * 100.0}')
+    if [[ $mem_usage -gt 90 ]]; then
+        echo -e "${COLOR_ERROR}✗ High memory usage: ${mem_usage}%${COLOR_RESET}"
+        ((issues++))
+    elif [[ $mem_usage -gt 80 ]]; then
+        echo -e "${COLOR_WARNING}⚠ Memory usage getting high: ${mem_usage}%${COLOR_RESET}"
+        ((warnings++))
+    else
+        echo -e "${COLOR_SUCCESS}✓ Memory usage: ${mem_usage}%${COLOR_RESET}"
+    fi
+    
+    # Check load average
+    local load_avg=$(uptime | awk -F'load average:' '{print $2}' | xargs)
+    local load1=$(echo "$load_avg" | cut -d, -f1 | xargs)
+    
+    local cpu_cores=$(nproc)
+    local load_threshold=$(echo "$cpu_cores * 2" | bc)
+    
+    if (( $(echo "$load1 > $load_threshold" | bc -l 2>/dev/null || echo "0") )); then
+        echo -e "${COLOR_ERROR}✗ High load average: $load1${COLOR_RESET}"
+        ((issues++))
+    else
+        echo -e "${COLOR_SUCCESS}✓ Load average: $load_avg${COLOR_RESET}"
+    fi
+    
+    # Check critical services
+    local critical_services=("xray" "ssh")
+    for service in "${critical_services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "${COLOR_SUCCESS}✓ Service $service: Running${COLOR_RESET}"
+        else
+            echo -e "${COLOR_ERROR}✗ Service $service: Stopped${COLOR_RESET}"
+            ((issues++))
+        fi
+    done
+    
+    # Check panel services
+    local panel_services=("nginx" "cron")
+    for service in "${panel_services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "${COLOR_SUCCESS}✓ Service $service: Running${COLOR_RESET}"
+        else
+            echo -e "${COLOR_WARNING}⚠ Service $service: Stopped${COLOR_RESET}"
+            ((warnings++))
+        fi
+    done
+    
+    # Check firewall status
+    if command -v ufw &> /dev/null; then
+        if ufw status | grep -q "Status: active"; then
+            echo -e "${COLOR_SUCCESS}✓ Firewall: Active${COLOR_RESET}"
+        else
+            echo -e "${COLOR_WARNING}⚠ Firewall: Inactive${COLOR_RESET}"
+            ((warnings++))
+        fi
+    fi
+    
+    # Check for system updates
+    if command -v apt-get &> /dev/null; then
+        local updates=$(apt-get -s upgrade | grep -c "^Inst")
+        if [[ $updates -gt 0 ]]; then
+            echo -e "${COLOR_WARNING}⚠ System updates available: $updates${COLOR_RESET}"
+            ((warnings++))
+        else
+            echo -e "${COLOR_SUCCESS}✓ System: Up to date${COLOR_RESET}"
+        fi
+    fi
+    
+    echo ""
+    
+    # Summary
+    if [[ $issues -gt 0 ]]; then
+        echo -e "${COLOR_ERROR}Health Check: $issues issue(s) found that need attention${COLOR_RESET}"
+        return 1
+    elif [[ $warnings -gt 0 ]]; then
+        echo -e "${COLOR_WARNING}Health Check: $warnings warning(s) - monitor closely${COLOR_RESET}"
+        return 2
+    else
+        echo -e "${COLOR_SUCCESS}Health Check: All systems normal${COLOR_RESET}"
+        return 0
+    fi
+    
+    log_helper "Performed system health check - Issues: $issues, Warnings: $warnings"
+}
+
+# Fix common issues
+fix_common_issues() {
+    echo -e "${COLOR_INFO}Fixing common issues...${COLOR_RESET}"
+    
+    local fixes_applied=0
+    
+    # Fix permission issues
+    echo -e "${COLOR_INFO}Checking permissions...${COLOR_RESET}"
+    chmod -R 755 "$PANEL_DIR/scripts"
+    chmod 600 "$CONFIG_DIR"/*.db 2>/dev/null
+    ((fixes_applied++))
+    
+    # Fix ownership
+    chown -R root:root "$PANEL_DIR"
+    
+    # Restart failed services
+    echo -e "${COLOR_INFO}Restarting failed services...${COLOR_RESET}"
+    local services=("xray" "ssh" "nginx")
+    for service in "${services[@]}"; do
+        if ! systemctl is-active --quiet "$service"; then
+            echo -e "${COLOR_WARNING}Restarting $service service...${COLOR_RESET}"
+            systemctl restart "$service"
+            ((fixes_applied++))
+        fi
+    done
+    
+    # Fix cron jobs
+    echo -e "${COLOR_INFO}Ensuring cron jobs are active...${COLOR_RESET}"
+    if ! crontab -l 2>/dev/null | grep -q "maut-backup"; then
+        echo -e "${COLOR_WARNING}Restoring backup cron job...${COLOR_RESET}"
+        (crontab -l 2>/dev/null; echo "0 2 * * * $SCRIPT_DIR/maut-backup auto") | crontab -
+        ((fixes_applied++))
+    fi
+    
+    if ! crontab -l 2>/dev/null | grep -q "maut-monitor"; then
+        echo -e "${COLOR_WARNING}Restoring monitor cron job...${COLOR_RESET}"
+        (crontab -l 2>/dev/null; echo "*/5 * * * * $SCRIPT_DIR/maut-monitor check") | crontab -
+        ((fixes_applied++))
+    fi
+    
+    # Fix SSH banner
+    if [[ ! -f "/etc/issue.net" ]] || ! grep -q "MAUT PANEL PRO" "/etc/issue.net"; then
+        echo -e "${COLOR_WARNING}Restoring SSH banner...${COLOR_RESET}"
+        "$SCRIPT_DIR/maut-banner" create
+        ((fixes_applied++))
+    fi
+    
+    # Fix Xray configuration
+    local xray_config="/usr/local/etc/xray/config.json"
+    if [[ ! -f "$xray_config" ]]; then
+        echo -e "${COLOR_WARNING}Creating basic Xray configuration...${COLOR_RESET}"
+        "$SCRIPT_DIR/maut-xray" 2>/dev/null
+        ((fixes_applied++))
+    fi
+    
+    echo -e "${COLOR_SUCCESS}Applied $fixes_applied fixes${COLOR_RESET}"
+    log_helper "Fixed common issues - Applied $fixes_applied fixes"
+}
+
+# Backup configuration
+backup_configuration() {
+    echo -e "${COLOR_INFO}Backing up configuration...${COLOR_RESET}"
+    
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$PANEL_DIR/backup/config_backup_$timestamp.tar.gz"
+    
+    mkdir -p "$PANEL_DIR/backup"
+    
+    # Backup critical configuration files
+    tar -czf "$backup_file" \
+        "$CONFIG_DIR" \
+        "$SCRIPT_DIR" \
+        "/usr/local/etc/xray/config.json" \
+        "/etc/nginx/conf.d/maut-websocket.conf" 2>/dev/null
+    
+    if [[ $? -eq 0 ]]; then
+        local size=$(du -h "$backup_file" | cut -f1)
+        echo -e "${COLOR_SUCCESS}Configuration backed up: $backup_file ($size)${COLOR_RESET}"
+        log_helper "Backed up configuration: $(basename "$backup_file")"
+    else
+        echo -e "${COLOR_ERROR}Configuration backup failed${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Restore configuration
+restore_configuration() {
+    echo -e "${COLOR_INFO}Restoring configuration...${COLOR_RESET}"
+    
+    local backups=($(ls -t "$PANEL_DIR/backup"/config_backup_*.tar.gz 2>/dev/null))
+    
+    if [[ ${#backups[@]} -eq 0 ]]; then
+        echo -e "${COLOR_ERROR}No configuration backups found${COLOR_RESET}"
+        return 1
+    fi
+    
+    echo -e "${COLOR_INFO}Available backups:${COLOR_RESET}"
+    local i=1
+    for backup in "${backups[@]}"; do
+        echo "$i. $(basename "$backup")"
+        ((i++))
+    done
+    
+    read -p "Select backup to restore (1-${#backups[@]}): " choice
+    
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ $choice -lt 1 ]] || [[ $choice -gt ${#backups[@]} ]]; then
+        echo -e "${COLOR_ERROR}Invalid selection${COLOR_RESET}"
+        return 1
+    fi
+    
+    local selected_backup="${backups[$((choice-1))]}"
+    
+    echo -e "${COLOR_WARNING}Restoring from: $(basename "$selected_backup")${COLOR_RESET}"
+    read -p "Are you sure? This will overwrite current configuration! (y/N): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Restore cancelled"
+        return
+    fi
+    
+    # Stop services
+    systemctl stop xray 2>/dev/null
+    
+    # Restore configuration
+    tar -xzf "$selected_backup" -C "/"
+    
+    # Restart services
+    systemctl start xray 2>/dev/null
+    systemctl reload nginx 2>/dev/null
+    
+    echo -e "${COLOR_SUCCESS}Configuration restored successfully!${COLOR_RESET}"
+    log_helper "Restored configuration from $(basename "$selected_backup")"
+}
+
+# Show system information
+show_system_info() {
+    echo -e "${COLOR_INFO}System Information${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # OS information
+    echo -e "${COLOR_SUCCESS}Operating System:${COLOR_RESET}"
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        echo "  $PRETTY_NAME"
+    else
+        echo "  $(uname -s) $(uname -r)"
+    fi
+    
+    # Kernel version
+    echo -e "  Kernel: $(uname -r)"
+    
+    # Uptime
+    echo -e "  Uptime: $(uptime -p | sed 's/up //')"
+    
+    # CPU information
+    echo -e "${COLOR_SUCCESS}CPU Information:${COLOR_RESET}"
+    echo -e "  Model: $(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)"
+    echo -e "  Cores: $(nproc)"
+    
+    # Memory information
+    echo -e "${COLOR_SUCCESS}Memory Information:${COLOR_RESET}"
+    local mem_total=$(free -h | grep Mem | awk '{print $2}')
+    local mem_used=$(free -h | grep Mem | awk '{print $3}')
+    echo -e "  Total: $mem_total"
+    echo -e "  Used: $mem_used"
+    
+    # Disk information
+    echo -e "${COLOR_SUCCESS}Disk Information:${COLOR_RESET}"
+    df -h / | awk 'NR==2 {print "  Size: " $2 ", Used: " $3 " (" $5 ")"}'
+    
+    # Network information
+    echo -e "${COLOR_SUCCESS}Network Information:${COLOR_RESET}"
+    local public_ip=$(curl -s ipv4.icanhazip.com)
+    echo -e "  Public IP: $public_ip"
+    
+    # Service status
+    echo -e "${COLOR_SUCCESS}Service Status:${COLOR_RESET}"
+    local services=("xray" "ssh" "nginx")
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "  $service: ${COLOR_SUCCESS}Running${COLOR_RESET}"
+        else
+            echo -e "  $service: ${COLOR_ERROR}Stopped${COLOR_RESET}"
+        fi
+    done
+    
+    # Panel information
+    echo -e "${COLOR_SUCCESS}Panel Information:${COLOR_RESET}"
+    echo -e "  Version: 2.1 Pro"
+    echo -e "  Installation: $PANEL_DIR"
+    echo -e "  Configurations: $CONFIG_DIR"
+    echo -e "  Scripts: $SCRIPT_DIR"
+}
+
+# Helper menu
+show_helper_menu() {
+    clear
+    load_theme
+    
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║            HELPER TOOLS             ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Utility functions for system maintenance${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}HELPER MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Kill Multi-Login Users"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} System Cleanup"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} System Health Check"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Fix Common Issues"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Backup Configuration"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Restore Configuration"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Show System Info"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main helper function
+main() {
+    load_theme
+    
+    # Handle command line arguments
+    case "${1:-}" in
+        "kill-multi-login")
+            kill_multi_login
+            return
+            ;;
+        "cleanup")
+            system_cleanup
+            return
+            ;;
+        "health-check")
+            system_health_check
+            return
+            ;;
+        "fix-issues")
+            fix_common_issues
+            return
+            ;;
+        "backup-config")
+            backup_configuration
+            return
+            ;;
+        "system-info")
+            show_system_info
+            return
+            ;;
+    esac
+    
+    # Interactive menu
+    while true; do
+        show_helper_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) kill_multi_login ;;
+            02) system_cleanup ;;
+            03) system_health_check ;;
+            04) fix_common_issues ;;
+            05) backup_configuration ;;
+            06) restore_configuration ;;
+            07) show_system_info ;;
+            08) 
+                log_helper "Exited Helper Tools"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

@@ -1,0 +1,496 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - SERVICE RESTART MANAGER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_action() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - RESTART: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Restart specific service
+restart_specific_service() {
+    echo -e "${COLOR_INFO}Restart Specific Service${COLOR_RESET}"
+    echo ""
+    
+    echo "Select service to restart:"
+    echo "1. Xray Core"
+    echo "2. SSH Service"
+    echo "3. Nginx"
+    echo "4. Cron Service"
+    echo "5. Fail2ban"
+    echo "6. All Services"
+    echo "7. Back to Menu"
+    
+    read -p "Enter choice (1-7): " choice
+    
+    case $choice in
+        1)
+            echo -e "${COLOR_INFO}Restarting Xray service...${COLOR_RESET}"
+            systemctl restart xray
+            if systemctl is-active --quiet xray; then
+                echo -e "${COLOR_SUCCESS}Xray service restarted successfully${COLOR_RESET}"
+                log_action "Restarted Xray service"
+            else
+                echo -e "${COLOR_ERROR}Failed to restart Xray service${COLOR_RESET}"
+            fi
+            ;;
+        2)
+            echo -e "${COLOR_INFO}Restarting SSH service...${COLOR_RESET}"
+            systemctl restart ssh
+            if systemctl is-active --quiet ssh; then
+                echo -e "${COLOR_SUCCESS}SSH service restarted successfully${COLOR_RESET}"
+                log_action "Restarted SSH service"
+            else
+                echo -e "${COLOR_ERROR}Failed to restart SSH service${COLOR_RESET}"
+            fi
+            ;;
+        3)
+            echo -e "${COLOR_INFO}Restarting Nginx...${COLOR_RESET}"
+            systemctl restart nginx
+            if systemctl is-active --quiet nginx; then
+                echo -e "${COLOR_SUCCESS}Nginx restarted successfully${COLOR_RESET}"
+                log_action "Restarted Nginx"
+            else
+                echo -e "${COLOR_ERROR}Failed to restart Nginx${COLOR_RESET}"
+            fi
+            ;;
+        4)
+            echo -e "${COLOR_INFO}Restarting Cron service...${COLOR_RESET}"
+            systemctl restart cron
+            if systemctl is-active --quiet cron; then
+                echo -e "${COLOR_SUCCESS}Cron service restarted successfully${COLOR_RESET}"
+                log_action "Restarted Cron service"
+            else
+                echo -e "${COLOR_ERROR}Failed to restart Cron service${COLOR_RESET}"
+            fi
+            ;;
+        5)
+            echo -e "${COLOR_INFO}Restarting Fail2ban...${COLOR_RESET}"
+            systemctl restart fail2ban
+            if systemctl is-active --quiet fail2ban; then
+                echo -e "${COLOR_SUCCESS}Fail2ban restarted successfully${COLOR_RESET}"
+                log_action "Restarted Fail2ban"
+            else
+                echo -e "${COLOR_ERROR}Failed to restart Fail2ban${COLOR_RESET}"
+            fi
+            ;;
+        6)
+            restart_all_services
+            ;;
+        7)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# Restart all services
+restart_all_services() {
+    echo -e "${COLOR_INFO}Restarting All Services${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}This will restart all panel services${COLOR_RESET}"
+    read -p "Are you sure? (y/N): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Operation cancelled"
+        return
+    fi
+    
+    local services=("xray" "ssh" "nginx" "cron")
+    local success_count=0
+    local total_count=0
+    
+    for service in "${services[@]}"; do
+        ((total_count++))
+        echo -e "${COLOR_INFO}Restarting $service...${COLOR_RESET}"
+        
+        if systemctl restart "$service"; then
+            sleep 2
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${COLOR_SUCCESS}✓ $service restarted successfully${COLOR_RESET}"
+                ((success_count++))
+            else
+                echo -e "${COLOR_ERROR}✗ $service failed to start${COLOR_RESET}"
+            fi
+        else
+            echo -e "${COLOR_ERROR}✗ Failed to restart $service${COLOR_RESET}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${COLOR_SUCCESS}Restart summary: $success_count/$total_count services restarted successfully${COLOR_RESET}"
+    log_action "Restarted all services - $success_count/$total_count successful"
+}
+
+# Reload services (soft restart)
+reload_services() {
+    echo -e "${COLOR_INFO}Reload Services (Soft Restart)${COLOR_RESET}"
+    echo ""
+    
+    echo "Select service to reload:"
+    echo "1. Xray Core"
+    echo "2. Nginx"
+    echo "3. SSH Service"
+    echo "4. All Reloadable Services"
+    echo "5. Back to Menu"
+    
+    read -p "Enter choice (1-5): " choice
+    
+    case $choice in
+        1)
+            echo -e "${COLOR_INFO}Reloading Xray configuration...${COLOR_RESET}"
+            systemctl reload xray
+            echo -e "${COLOR_SUCCESS}Xray configuration reloaded${COLOR_RESET}"
+            log_action "Reloaded Xray configuration"
+            ;;
+        2)
+            echo -e "${COLOR_INFO}Reloading Nginx configuration...${COLOR_RESET}"
+            if nginx -t; then
+                systemctl reload nginx
+                echo -e "${COLOR_SUCCESS}Nginx configuration reloaded${COLOR_RESET}"
+                log_action "Reloaded Nginx configuration"
+            else
+                echo -e "${COLOR_ERROR}Nginx configuration test failed${COLOR_RESET}"
+            fi
+            ;;
+        3)
+            echo -e "${COLOR_INFO}Reloading SSH service...${COLOR_RESET}"
+            systemctl reload ssh
+            echo -e "${COLOR_SUCCESS}SSH service reloaded${COLOR_RESET}"
+            log_action "Reloaded SSH service"
+            ;;
+        4)
+            echo -e "${COLOR_INFO}Reloading all services...${COLOR_RESET}"
+            systemctl reload xray
+            systemctl reload nginx
+            systemctl reload ssh
+            echo -e "${COLOR_SUCCESS}All services reloaded${COLOR_RESET}"
+            log_action "Reloaded all services"
+            ;;
+        5)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+}
+
+# Stop services
+stop_services() {
+    echo -e "${COLOR_INFO}Stop Services${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}WARNING: This will stop services and may disconnect users${COLOR_RESET}"
+    echo ""
+    
+    echo "Select service to stop:"
+    echo "1. Xray Core"
+    echo "2. Nginx"
+    echo "3. All Services"
+    echo "4. Back to Menu"
+    
+    read -p "Enter choice (1-4): " choice
+    
+    case $choice in
+        1)
+            echo -e "${COLOR_INFO}Stopping Xray service...${COLOR_RESET}"
+            systemctl stop xray
+            echo -e "${COLOR_SUCCESS}Xray service stopped${COLOR_RESET}"
+            log_action "Stopped Xray service"
+            ;;
+        2)
+            echo -e "${COLOR_INFO}Stopping Nginx...${COLOR_RESET}"
+            systemctl stop nginx
+            echo -e "${COLOR_SUCCESS}Nginx stopped${COLOR_RESET}"
+            log_action "Stopped Nginx"
+            ;;
+        3)
+            echo -e "${COLOR_INFO}Stopping all services...${COLOR_RESET}"
+            systemctl stop xray
+            systemctl stop nginx
+            echo -e "${COLOR_SUCCESS}All services stopped${COLOR_RESET}"
+            log_action "Stopped all services"
+            ;;
+        4)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+}
+
+# Start services
+start_services() {
+    echo -e "${COLOR_INFO}Start Services${COLOR_RESET}"
+    echo ""
+    
+    echo "Select service to start:"
+    echo "1. Xray Core"
+    echo "2. Nginx"
+    echo "3. All Services"
+    echo "4. Back to Menu"
+    
+    read -p "Enter choice (1-4): " choice
+    
+    case $choice in
+        1)
+            echo -e "${COLOR_INFO}Starting Xray service...${COLOR_RESET}"
+            systemctl start xray
+            if systemctl is-active --quiet xray; then
+                echo -e "${COLOR_SUCCESS}Xray service started successfully${COLOR_RESET}"
+                log_action "Started Xray service"
+            else
+                echo -e "${COLOR_ERROR}Failed to start Xray service${COLOR_RESET}"
+            fi
+            ;;
+        2)
+            echo -e "${COLOR_INFO}Starting Nginx...${COLOR_RESET}"
+            systemctl start nginx
+            if systemctl is-active --quiet nginx; then
+                echo -e "${COLOR_SUCCESS}Nginx started successfully${COLOR_RESET}"
+                log_action "Started Nginx"
+            else
+                echo -e "${COLOR_ERROR}Failed to start Nginx${COLOR_RESET}"
+            fi
+            ;;
+        3)
+            echo -e "${COLOR_INFO}Starting all services...${COLOR_RESET}"
+            systemctl start xray
+            systemctl start nginx
+            echo -e "${COLOR_SUCCESS}All services started${COLOR_RESET}"
+            log_action "Started all services"
+            ;;
+        4)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+}
+
+# Check service status
+check_service_status() {
+    echo -e "${COLOR_INFO}Service Status${COLOR_RESET}"
+    echo ""
+    
+    local services=("xray" "ssh" "nginx" "cron" "fail2ban")
+    
+    for service in "${services[@]}"; do
+        echo -n "$service: "
+        if systemctl is-active --quiet "$service"; then
+            echo -e "${COLOR_SUCCESS}RUNNING${COLOR_RESET}"
+            
+            # Show additional info for running services
+            if [[ "$service" == "xray" ]]; then
+                local xray_pid=$(pgrep xray)
+                if [[ -n "$xray_pid" ]]; then
+                    local memory=$(ps -p "$xray_pid" -o rss --no-headers | awk '{printf "%.1f MB", $1/1024}')
+                    echo -e "       Memory: $memory"
+                fi
+            fi
+            
+            # Show uptime
+            local uptime=$(systemctl status "$service" | grep "Active:" | cut -d';' -f2 | xargs)
+            echo -e "       Uptime: $uptime"
+            
+        else
+            echo -e "${COLOR_ERROR}STOPPED${COLOR_RESET}"
+        fi
+        echo ""
+    done
+    
+    # Show network connections
+    echo -e "${COLOR_INFO}Network Connections:${COLOR_RESET}"
+    echo -e "Xray ports: $(netstat -tulpn | grep xray | wc -l) connections"
+    echo -e "SSH connections: $(who | wc -l) users"
+}
+
+# Service logs
+show_service_logs() {
+    echo -e "${COLOR_INFO}Service Logs${COLOR_RESET}"
+    echo ""
+    
+    echo "Select service logs to view:"
+    echo "1. Xray Logs (last 20 lines)"
+    echo "2. Nginx Access Logs"
+    echo "3. Nginx Error Logs"
+    echo "4. System Logs"
+    echo "5. Back to Menu"
+    
+    read -p "Enter choice (1-5): " choice
+    
+    case $choice in
+        1)
+            echo -e "${COLOR_INFO}Xray Logs:${COLOR_RESET}"
+            journalctl -u xray -n 20 --no-pager
+            ;;
+        2)
+            echo -e "${COLOR_INFO}Nginx Access Logs:${COLOR_RESET}"
+            tail -20 /var/log/nginx/access.log 2>/dev/null || echo "No access logs found"
+            ;;
+        3)
+            echo -e "${COLOR_INFO}Nginx Error Logs:${COLOR_RESET}"
+            tail -20 /var/log/nginx/error.log 2>/dev/null || echo "No error logs found"
+            ;;
+        4)
+            echo -e "${COLOR_INFO}System Logs (last 15 lines):${COLOR_RESET}"
+            journalctl -n 15 --no-pager
+            ;;
+        5)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+}
+
+# Emergency restart (with cleanup)
+emergency_restart() {
+    echo -e "${COLOR_INFO}Emergency Restart${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}EMERGENCY MODE - Use only if services are unresponsive${COLOR_RESET}"
+    echo -e "${COLOR_WARNING}This will force kill processes and perform aggressive restart${COLOR_RESET}"
+    echo ""
+    
+    read -p "Are you sure you want to continue? (y/N): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Emergency restart cancelled"
+        return
+    fi
+    
+    # Force kill services
+    echo -e "${COLOR_INFO}Force stopping services...${COLOR_RESET}"
+    pkill -9 xray
+    pkill -9 nginx
+    
+    # Clean up temp files
+    echo -e "${COLOR_INFO}Cleaning temporary files...${COLOR_RESET}"
+    rm -f /tmp/xray*.log
+    rm -f /tmp/nginx*.tmp
+    
+    # Clear some cache
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+    
+    # Restart services
+    echo -e "${COLOR_INFO}Starting services...${COLOR_RESET}"
+    systemctl start xray
+    systemctl start nginx
+    
+    # Wait and check status
+    sleep 5
+    
+    echo -e "${COLOR_INFO}Service status after emergency restart:${COLOR_RESET}"
+    check_service_status
+    
+    log_action "Performed emergency restart"
+}
+
+# Restart menu
+show_restart_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║        SERVICE RESTART MANAGER      ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Manage service restarts and status checks${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Show current status
+    echo -e "${COLOR_SUCCESS}Current Service Status:${COLOR_RESET}"
+    local services=("xray" "ssh" "nginx")
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "  $service: ${COLOR_SUCCESS}● RUNNING${COLOR_RESET}"
+        else
+            echo -e "  $service: ${COLOR_ERROR}● STOPPED${COLOR_RESET}"
+        fi
+    done
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}RESTART MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Restart Specific Service"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Restart All Services"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} Reload Services"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Stop Services"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Start Services"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Check Service Status"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Show Service Logs"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Emergency Restart"
+    echo -e "${COLOR_SUCCESS}09${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main restart function
+main() {
+    load_theme
+    
+    while true; do
+        show_restart_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) restart_specific_service ;;
+            02) restart_all_services ;;
+            03) reload_services ;;
+            04) stop_services ;;
+            05) start_services ;;
+            06) check_service_status ;;
+            07) show_service_logs ;;
+            08) emergency_restart ;;
+            09) 
+                log_action "Exited Restart Manager"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

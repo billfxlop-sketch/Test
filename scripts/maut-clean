@@ -1,0 +1,488 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - SYSTEM CLEANER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+BACKUP_DIR="$PANEL_DIR/backup"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_action() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - CLEANER: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Clean log files
+clean_log_files() {
+    echo -e "${COLOR_INFO}Cleaning Log Files${COLOR_RESET}"
+    echo ""
+    
+    local freed_space=0
+    
+    # Clean panel logs
+    echo -e "${COLOR_INFO}Cleaning panel logs...${COLOR_RESET}"
+    for log_file in "$LOG_DIR"/*.log; do
+        if [[ -f "$log_file" ]]; then
+            local size=$(stat -c%s "$log_file" 2>/dev/null || echo 0)
+            if [[ $size -gt 10485760 ]]; then  # 10MB
+                echo -e "Rotating $(basename "$log_file") ($((size/1024/1024))MB)"
+                echo -n "" > "$log_file"
+                ((freed_space += size))
+            fi
+        fi
+    done
+    
+    # Clean system logs
+    echo -e "${COLOR_INFO}Cleaning system logs...${COLOR_RESET}"
+    logrotate -f /etc/logrotate.conf 2>/dev/null
+    
+    # Clean temporary logs
+    echo -e "${COLOR_INFO}Cleaning temporary logs...${COLOR_RESET}"
+    find /var/log -name "*.log" -type f -exec truncate -s 0 {} \; 2>/dev/null
+    
+    # Clean Xray logs
+    if [[ -f "/var/log/xray/access.log" ]]; then
+        echo -e "Cleaning Xray logs"
+        truncate -s 0 /var/log/xray/access.log 2>/dev/null
+        truncate -s 0 /var/log/xray/error.log 2>/dev/null
+    fi
+    
+    echo -e "${COLOR_SUCCESS}Log files cleaned${COLOR_RESET}"
+    log_action "Cleaned log files"
+}
+
+# Clean temporary files
+clean_temp_files() {
+    echo -e "${COLOR_INFO}Cleaning Temporary Files${COLOR_RESET}"
+    echo ""
+    
+    local freed_space=0
+    
+    # Clean system temp files
+    echo -e "${COLOR_INFO}Cleaning system temporary files...${COLOR_RESET}"
+    rm -rf /tmp/*
+    rm -rf /var/tmp/*
+    
+    # Clean package cache
+    echo -e "${COLOR_INFO}Cleaning package cache...${COLOR_RESET}"
+    if command -v apt-get &> /dev/null; then
+        apt-get clean
+        freed_space=$((freed_space + $(du -s /var/cache/apt/ | awk '{print $1}')))
+    elif command -v yum &> /dev/null; then
+        yum clean all
+    fi
+    
+    # Clean thumbnail cache
+    echo -e "${COLOR_INFO}Cleaning thumbnail cache...${COLOR_RESET}"
+    rm -rf /root/.cache/thumbnails
+    rm -rf /home/*/.cache/thumbnails 2>/dev/null
+    
+    # Clean browser caches
+    echo -e "${COLOR_INFO}Cleaning browser caches...${COLOR_RESET}"
+    rm -rf /root/.cache/mozilla
+    rm -rf /home/*/.cache/mozilla 2>/dev/null
+    
+    echo -e "${COLOR_SUCCESS}Temporary files cleaned${COLOR_RESET}"
+    log_action "Cleaned temporary files"
+}
+
+# Clean backup files
+clean_backup_files() {
+    echo -e "${COLOR_INFO}Cleaning Backup Files${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter number of days to keep backups (default: 30): " days
+    days=${days:-30}
+    
+    echo -e "${COLOR_INFO}Removing backups older than $days days...${COLOR_RESET}"
+    
+    local deleted_count=0
+    local freed_space=0
+    
+    # Clean panel backups
+    if [[ -d "$BACKUP_DIR" ]]; then
+        while IFS= read -r -d '' file; do
+            local file_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
+            if rm -f "$file"; then
+                ((deleted_count++))
+                ((freed_space += file_size))
+                echo -e "Deleted: $(basename "$file")"
+            fi
+        done < <(find "$BACKUP_DIR" -name "*.tar.gz" -mtime "+$days" -print0)
+    fi
+    
+    # Clean system backups
+    find /var/backups -name "*.gz" -mtime "+$days" -delete 2>/dev/null
+    
+    if [[ $deleted_count -gt 0 ]]; then
+        local freed_mb=$((freed_space / 1024 / 1024))
+        echo -e "${COLOR_SUCCESS}Deleted $deleted_count backup files, freed ${freed_mb}MB${COLOR_RESET}"
+    else
+        echo -e "${COLOR_SUCCESS}No old backup files found${COLOR_RESET}"
+    fi
+    
+    log_action "Cleaned backups older than $days days"
+}
+
+# Clean expired users
+clean_expired_users() {
+    echo -e "${COLOR_INFO}Cleaning Expired Users${COLOR_RESET}"
+    echo ""
+    
+    local current_date=$(date '+%Y-%m-%d')
+    local user_db="$CONFIG_DIR/maut-users.db"
+    local cleaned_count=0
+    
+    if [[ ! -f "$user_db" ]]; then
+        echo -e "${COLOR_WARNING}No user database found${COLOR_RESET}"
+        return
+    fi
+    
+    echo -e "${COLOR_INFO}Checking for expired users...${COLOR_RESET}"
+    
+    # Create backup
+    cp "$user_db" "$user_db.backup.$(date +%s)"
+    
+    # Create temporary file
+    local temp_file=$(mktemp)
+    
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
+            echo "$line" >> "$temp_file"
+            continue
+        fi
+        
+        local service=$(echo "$line" | cut -d'|' -f1)
+        local username=$(echo "$line" | cut -d'|' -f2)
+        local expiry=$(echo "$line" | cut -d'|' -f6)
+        local status=$(echo "$line" | cut -d'|' -f8)
+        
+        # Check if user is expired and remove system user
+        if [[ "$expiry" < "$current_date" ]]; then
+            if [[ "$service" == "ssh" ]]; then
+                echo -e "${COLOR_WARNING}Removing expired SSH user: $username${COLOR_RESET}"
+                userdel -r "$username" 2>/dev/null
+            fi
+            ((cleaned_count++))
+            log_action "Removed expired user: $username"
+        else
+            echo "$line" >> "$temp_file"
+        fi
+    done < "$user_db"
+    
+    # Replace the database
+    mv "$temp_file" "$user_db"
+    
+    if [[ $cleaned_count -eq 0 ]]; then
+        echo -e "${COLOR_SUCCESS}No expired users found${COLOR_RESET}"
+    else
+        echo -e "${COLOR_SUCCESS}Cleaned $cleaned_count expired users${COLOR_RESET}"
+    fi
+}
+
+# Clean DNS cache
+clean_dns_cache() {
+    echo -e "${COLOR_INFO}Cleaning DNS Cache${COLOR_RESET}"
+    echo ""
+    
+    # Restart DNS resolver
+    if systemctl is-active --quiet systemd-resolved; then
+        systemctl restart systemd-resolved
+        echo -e "${COLOR_SUCCESS}Systemd-resolved restarted${COLOR_RESET}"
+    fi
+    
+    # Clear nscd cache
+    if command -v nscd &> /dev/null; then
+        nscd -i hosts
+        echo -e "${COLOR_SUCCESS}NSCD cache cleared${COLOR_RESET}"
+    fi
+    
+    # Clear DNS cache file
+    if [[ -f "/etc/resolv.conf" ]]; then
+        echo -e "${COLOR_SUCCESS}DNS configuration reloaded${COLOR_RESET}"
+    fi
+    
+    log_action "Cleaned DNS cache"
+}
+
+# Clean memory cache
+clean_memory_cache() {
+    echo -e "${COLOR_INFO}Cleaning Memory Cache${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}This will clear system memory caches${COLOR_RESET}"
+    read -p "Continue? (y/N): " confirm
+    
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        sync
+        echo 3 > /proc/sys/vm/drop_caches
+        
+        # Show memory before and after
+        echo -e "${COLOR_SUCCESS}Memory cache cleared${COLOR_RESET}"
+        echo -e "${COLOR_INFO}Current memory status:${COLOR_RESET}"
+        free -h
+        
+        log_action "Cleaned memory cache"
+    else
+        echo "Operation cancelled"
+    fi
+}
+
+# Clean orphaned packages
+clean_orphaned_packages() {
+    echo -e "${COLOR_INFO}Cleaning Orphaned Packages${COLOR_RESET}"
+    echo ""
+    
+    if command -v apt-get &> /dev/null; then
+        echo -e "${COLOR_INFO}Checking for orphaned packages...${COLOR_RESET}"
+        apt-get autoremove --purge -y
+        echo -e "${COLOR_SUCCESS}Orphaned packages cleaned${COLOR_RESET}"
+    elif command -v yum &> /dev/null; then
+        echo -e "${COLOR_INFO}Checking for orphaned packages...${COLOR_RESET}"
+        package-cleanup --orphans -y
+        echo -e "${COLOR_SUCCESS}Orphaned packages cleaned${COLOR_RESET}"
+    else
+        echo -e "${COLOR_WARNING}Package manager not supported${COLOR_RESET}"
+    fi
+    
+    log_action "Cleaned orphaned packages"
+}
+
+# Comprehensive system cleanup
+comprehensive_cleanup() {
+    echo -e "${COLOR_INFO}Comprehensive System Cleanup${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}This will perform a full system cleanup${COLOR_RESET}"
+    echo -e "${COLOR_WARNING}The following will be cleaned:${COLOR_RESET}"
+    echo "• Log files"
+    echo "• Temporary files"
+    echo "• Old backups"
+    echo "• Expired users"
+    echo "• DNS cache"
+    echo "• Memory cache"
+    echo "• Orphaned packages"
+    echo ""
+    
+    read -p "Are you sure you want to continue? (y/N): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Operation cancelled"
+        return
+    fi
+    
+    local start_time=$(date +%s)
+    
+    # Perform all cleanup operations
+    clean_log_files
+    echo ""
+    
+    clean_temp_files
+    echo ""
+    
+    clean_backup_files
+    echo ""
+    
+    clean_expired_users
+    echo ""
+    
+    clean_dns_cache
+    echo ""
+    
+    clean_memory_cache
+    echo ""
+    
+    clean_orphaned_packages
+    echo ""
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    echo -e "${COLOR_SUCCESS}Comprehensive cleanup completed in ${duration} seconds${COLOR_RESET}"
+    log_action "Performed comprehensive system cleanup"
+}
+
+# Show disk usage
+show_disk_usage() {
+    echo -e "${COLOR_INFO}Disk Usage Analysis${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Overall disk usage
+    echo -e "${COLOR_SUCCESS}Overall Disk Usage:${COLOR_RESET}"
+    df -h /
+    echo ""
+    
+    # Large directories
+    echo -e "${COLOR_SUCCESS}Large Directories:${COLOR_RESET}"
+    du -sh /var/log /tmp /var/tmp /root /home 2>/dev/null | sort -hr
+    echo ""
+    
+    # Panel directory usage
+    echo -e "${COLOR_SUCCESS}Panel Directory Usage:${COLOR_RESET}"
+    du -sh "$PANEL_DIR"/* 2>/dev/null | sort -hr
+    echo ""
+    
+    # Large files
+    echo -e "${COLOR_SUCCESS}Large Files (>100MB):${COLOR_RESET}"
+    find / -type f -size +100M -exec ls -lh {} \; 2>/dev/null | awk '{print $5, $9}' | head -10
+}
+
+# Cleanup scheduler
+setup_cleanup_schedule() {
+    echo -e "${COLOR_INFO}Setup Cleanup Schedule${COLOR_RESET}"
+    echo ""
+    
+    echo "Select cleanup schedule:"
+    echo "1. Daily cleanup (2 AM)"
+    echo "2. Weekly cleanup (Sunday 3 AM)"
+    echo "3. Monthly cleanup (1st 4 AM)"
+    echo "4. Remove cleanup schedule"
+    echo "5. Back to Menu"
+    
+    read -p "Enter choice (1-5): " choice
+    
+    case $choice in
+        1)
+            echo -e "${COLOR_INFO}Setting up daily cleanup...${COLOR_RESET}"
+            (crontab -l 2>/dev/null | grep -v "maut-clean"; echo "0 2 * * * $SCRIPT_DIR/maut-clean auto") | crontab -
+            echo -e "${COLOR_SUCCESS}Daily cleanup scheduled at 2 AM${COLOR_RESET}"
+            ;;
+        2)
+            echo -e "${COLOR_INFO}Setting up weekly cleanup...${COLOR_RESET}"
+            (crontab -l 2>/dev/null | grep -v "maut-clean"; echo "0 3 * * 0 $SCRIPT_DIR/maut-clean auto") | crontab -
+            echo -e "${COLOR_SUCCESS}Weekly cleanup scheduled on Sundays at 3 AM${COLOR_RESET}"
+            ;;
+        3)
+            echo -e "${COLOR_INFO}Setting up monthly cleanup...${COLOR_RESET}"
+            (crontab -l 2>/dev/null | grep -v "maut-clean"; echo "0 4 1 * * $SCRIPT_DIR/maut-clean auto") | crontab -
+            echo -e "${COLOR_SUCCESS}Monthly cleanup scheduled on 1st at 4 AM${COLOR_RESET}"
+            ;;
+        4)
+            echo -e "${COLOR_INFO}Removing cleanup schedule...${COLOR_RESET}"
+            crontab -l 2>/dev/null | grep -v "maut-clean" | crontab -
+            echo -e "${COLOR_SUCCESS}Cleanup schedule removed${COLOR_RESET}"
+            ;;
+        5)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+    
+    log_action "Updated cleanup schedule: option $choice"
+}
+
+# Auto cleanup (for cron jobs)
+auto_cleanup() {
+    echo -e "${COLOR_INFO}Auto Cleanup Started${COLOR_RESET}"
+    
+    # Perform basic cleanup operations
+    clean_log_files
+    clean_temp_files
+    clean_backup_files
+    clean_expired_users
+    
+    echo -e "${COLOR_SUCCESS}Auto cleanup completed${COLOR_RESET}"
+    log_action "Auto cleanup performed"
+}
+
+# Clean menu
+show_clean_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║           SYSTEM CLEANER            ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Clean system files and optimize performance${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Show disk usage summary
+    echo -e "${COLOR_SUCCESS}Disk Usage Summary:${COLOR_RESET}"
+    df -h / | awk 'NR==2 {print "Used: " $3 "/" $2 " (" $5 ")"}'
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}CLEANER MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Clean Log Files"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Clean Temporary Files"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} Clean Backup Files"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Clean Expired Users"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Clean DNS Cache"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Clean Memory Cache"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Clean Orphaned Packages"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Comprehensive Cleanup"
+    echo -e "${COLOR_SUCCESS}09${COLOR_RESET} Show Disk Usage"
+    echo -e "${COLOR_SUCCESS}10${COLOR_RESET} Setup Cleanup Schedule"
+    echo -e "${COLOR_SUCCESS}11${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main clean function
+main() {
+    load_theme
+    
+    # Handle auto cleanup if argument passed
+    if [[ "$1" == "auto" ]]; then
+        auto_cleanup
+        return
+    fi
+    
+    while true; do
+        show_clean_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) clean_log_files ;;
+            02) clean_temp_files ;;
+            03) clean_backup_files ;;
+            04) clean_expired_users ;;
+            05) clean_dns_cache ;;
+            06) clean_memory_cache ;;
+            07) clean_orphaned_packages ;;
+            08) comprehensive_cleanup ;;
+            09) show_disk_usage ;;
+            10) setup_cleanup_schedule ;;
+            11) 
+                log_action "Exited System Cleaner"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

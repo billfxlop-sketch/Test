@@ -1,0 +1,492 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - BANNER MANAGER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+BANNER_FILE="/etc/issue.net"
+BANNER_BACKUP="$PANEL_DIR/backup/banner.backup"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_banner() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - BANNER: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Get system information for banner
+get_banner_info() {
+    # CPU usage
+    CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{printf "%.1f%%", 100 - $1}')
+    
+    # Memory usage
+    MEM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
+    MEM_USED=$(free -m | awk '/Mem:/ {print $3}')
+    MEM_USAGE_PERCENT=$((MEM_USED * 100 / MEM_TOTAL))
+    
+    # Swap usage
+    SWAP_TOTAL=$(free -m | awk '/Swap:/ {print $2}')
+    SWAP_USED=$(free -m | awk '/Swap:/ {print $3}')
+    if [[ $SWAP_TOTAL -gt 0 ]]; then
+        SWAP_USAGE_PERCENT=$((SWAP_USED * 100 / SWAP_TOTAL))
+    else
+        SWAP_USAGE_PERCENT=0
+    fi
+    
+    # Disk usage
+    DISK_USAGE=$(df / -h | awk 'NR==2 {print $5}')
+    DISK_USED=$(df / -h | awk 'NR==2 {print $3}')
+    DISK_AVAIL=$(df / -h | awk 'NR==2 {print $4}')
+    
+    # Uptime
+    UPTIME=$(uptime -p | sed 's/up //')
+    
+    # Load average
+    LOAD_AVG=$(uptime | awk -F'load average:' '{print $2}' | xargs)
+    
+    # Online users
+    ONLINE_USERS=$(who | wc -l)
+    
+    # Server IP
+    SERVER_IP=$(curl -s ipv4.icanhazip.com)
+    
+    # Current date
+    CURRENT_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+}
+
+# Create default banner
+create_default_banner() {
+    echo -e "${COLOR_INFO}Creating Default MAUT Banner...${COLOR_RESET}"
+    echo ""
+    
+    # Backup existing banner
+    if [[ -f "$BANNER_FILE" ]]; then
+        cp "$BANNER_FILE" "$BANNER_BACKUP"
+        echo -e "${COLOR_SUCCESS}Existing banner backed up${COLOR_RESET}"
+    fi
+    
+    get_banner_info
+    
+    # Create the banner with gradient effect and system info
+    cat > "$BANNER_FILE" << EOF
+[1;35m╔══════════════════════════════════════════════════════════════╗
+[1;35m║[1;36m    ███╗   ███╗ █████╗ ██╗   ██╗████████╗███████╗         [1;35m║
+[1;35m║[1;36m    ████╗ ████║██╔══██╗██║   ██║╚══██╔══╝██╔════╝         [1;35m║
+[1;35m║[1;36m    ██╔████╔██║███████║██║   ██║   ██║   █████╗           [1;35m║
+[1;35m║[1;36m    ██║╚██╔╝██║██╔══██║██║   ██║   ██║   ██╔══╝           [1;35m║
+[1;35m║[1;36m    ██║ ╚═╝ ██║██║  ██║╚██████╔╝   ██║   ███████╗         [1;35m║
+[1;35m║[1;36m    ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚══════╝         [1;35m║
+[1;35m║                                                            ║
+[1;35m║[1;33m              PANEL PRO EDITION v2.1                   [1;35m║
+[1;35m║[1;32m            Powered by MAUT CODER                      [1;35m║
+[1;35m╚══════════════════════════════════════════════════════════════╝
+
+[1;34m╔─────────────────────── [1;36mSystem Status[1;34m ───────────────────────╗
+[1;34m│  [1;37mCPU Load: [1;33m$CPU_USAGE[1;37m    Memory: [1;33m${MEM_USAGE_PERCENT}%%[1;37m    Swap: [1;33m${SWAP_USAGE_PERCENT}%% [1;34m│
+[1;34m│  [1;37mDisk Usage: [1;33m$DISK_USAGE[1;37m ($DISK_USED/$DISK_AVAIL)                [1;34m│
+[1;34m│  [1;37mUptime: [1;33m$UPTIME[1;37m        Users: [1;33m$ONLINE_USERS[1;37m              [1;34m│
+[1;34m│  [1;37mLoad Average: [1;33m$LOAD_AVG[1;37m                          [1;34m│
+[1;34m╚──────────────────────────────────────────────────────────────╝
+
+[1;35m╔─────────────────────── [1;36mService Status[1;35m ──────────────────────╗
+EOF
+
+    # Add service status
+    local services=("xray" "ssh" "nginx" "cron")
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "[1;35m│  [1;32m✓ $service[1;37m: Running                            [1;35m│" >> "$BANNER_FILE"
+        else
+            echo -e "[1;35m│  [1;31m✗ $service[1;37m: Stopped                            [1;35m│" >> "$BANNER_FILE"
+        fi
+    done
+
+    cat >> "$BANNER_FILE" << EOF
+[1;35m╚──────────────────────────────────────────────────────────────╝
+
+[1;33m╔──────────────────────── [1;36mServer Info[1;33m ────────────────────────╗
+[1;33m│  [1;37mIP: [1;36m$SERVER_IP                                       [1;33m│
+[1;33m│  [1;37mDate: [1;36m$CURRENT_DATE                               [1;33m│
+[1;33m│  [1;37mOwner: [1;36m@maut_coder                                  [1;33m│
+[1;33m╚──────────────────────────────────────────────────────────────╝
+
+[1;32m Welcome to MAUT PANEL PRO — POWERED BY MAUT CODER
+[0;37m Type 'maut-panel' to access the control panel
+
+EOF
+
+    echo -e "${COLOR_SUCCESS}Default MAUT banner created!${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Banner file: $BANNER_FILE${COLOR_RESET}"
+    
+    # Enable banner in SSH config
+    enable_ssh_banner
+    
+    log_banner "Created default banner"
+}
+
+# Enable SSH banner
+enable_ssh_banner() {
+    echo -e "${COLOR_INFO}Enabling SSH banner...${COLOR_RESET}"
+    
+    # Update SSH configuration
+    if grep -q "Banner" /etc/ssh/sshd_config; then
+        sed -i 's|#*Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config
+    else
+        echo "Banner /etc/issue.net" >> /etc/ssh/sshd_config
+    fi
+    
+    # Restart SSH service
+    if systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null; then
+        echo -e "${COLOR_SUCCESS}SSH banner enabled and service restarted${COLOR_RESET}"
+    else
+        echo -e "${COLOR_WARNING}Banner configured but SSH restart failed${COLOR_RESET}"
+    fi
+}
+
+# Update banner (for cron jobs)
+update_banner() {
+    get_banner_info
+    
+    # Create temporary banner file
+    local temp_banner="/tmp/maut_banner_temp"
+    
+    # Recreate the banner with updated information
+    cat > "$temp_banner" << EOF
+[1;35m╔══════════════════════════════════════════════════════════════╗
+[1;35m║[1;36m    ███╗   ███╗ █████╗ ██╗   ██╗████████╗███████╗         [1;35m║
+[1;35m║[1;36m    ████╗ ████║██╔══██╗██║   ██║╚══██╔══╝██╔════╝         [1;35m║
+[1;35m║[1;36m    ██╔████╔██║███████║██║   ██║   ██║   █████╗           [1;35m║
+[1;35m║[1;36m    ██║╚██╔╝██║██╔══██║██║   ██║   ██║   ██╔══╝           [1;35m║
+[1;35m║[1;36m    ██║ ╚═╝ ██║██║  ██║╚██████╔╝   ██║   ███████╗         [1;35m║
+[1;35m║[1;36m    ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚══════╝         [1;35m║
+[1;35m║                                                            ║
+[1;35m║[1;33m              PANEL PRO EDITION v2.1                   [1;35m║
+[1;35m║[1;32m            Powered by MAUT CODER                      [1;35m║
+[1;35m╚══════════════════════════════════════════════════════════════╝
+
+[1;34m╔─────────────────────── [1;36mSystem Status[1;34m ───────────────────────╗
+[1;34m│  [1;37mCPU Load: [1;33m$CPU_USAGE[1;37m    Memory: [1;33m${MEM_USAGE_PERCENT}%%[1;37m    Swap: [1;33m${SWAP_USAGE_PERCENT}%% [1;34m│
+[1;34m│  [1;37mDisk Usage: [1;33m$DISK_USAGE[1;37m ($DISK_USED/$DISK_AVAIL)                [1;34m│
+[1;34m│  [1;37mUptime: [1;33m$UPTIME[1;37m        Users: [1;33m$ONLINE_USERS[1;37m              [1;34m│
+[1;34m│  [1;37mLoad Average: [1;33m$LOAD_AVG[1;37m                          [1;34m│
+[1;34m╚──────────────────────────────────────────────────────────────╝
+
+[1;35m╔─────────────────────── [1;36mService Status[1;35m ──────────────────────╗
+EOF
+
+    # Add service status
+    local services=("xray" "ssh" "nginx" "cron")
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "[1;35m│  [1;32m✓ $service[1;37m: Running                            [1;35m│" >> "$temp_banner"
+        else
+            echo -e "[1;35m│  [1;31m✗ $service[1;37m: Stopped                            [1;35m│" >> "$temp_banner"
+        fi
+    done
+
+    cat >> "$temp_banner" << EOF
+[1;35m╚──────────────────────────────────────────────────────────────╝
+
+[1;33m╔──────────────────────── [1;36mServer Info[1;33m ────────────────────────╗
+[1;33m│  [1;37mIP: [1;36m$SERVER_IP                                       [1;33m│
+[1;33m│  [1;37mDate: [1;36m$CURRENT_DATE                               [1;33m│
+[1;33m│  [1;37mOwner: [1;36m@maut_coder                                  [1;33m│
+[1;33m╚──────────────────────────────────────────────────────────────╝
+
+[1;32m Welcome to MAUT PANEL PRO — POWERED BY MAUT CODER
+[0;37m Type 'maut-panel' to access the control panel
+
+EOF
+
+    # Replace the banner file
+    mv "$temp_banner" "$BANNER_FILE"
+    
+    log_banner "Banner updated via cron"
+}
+
+# Create custom banner
+create_custom_banner() {
+    echo -e "${COLOR_INFO}Create Custom Banner${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}This will replace the current banner${COLOR_RESET}"
+    read -p "Are you sure you want to continue? (y/N): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Operation cancelled"
+        return
+    fi
+    
+    # Create a temporary file for editing
+    local temp_banner="/tmp/maut_custom_banner"
+    
+    # If banner exists, use it as template
+    if [[ -f "$BANNER_FILE" ]]; then
+        cp "$BANNER_FILE" "$temp_banner"
+    else
+        # Create basic template
+        cat > "$temp_banner" << 'EOF'
+Welcome to MAUT PANEL PRO
+
+System Information:
+- CPU Usage: {{CPU}}
+- Memory Usage: {{MEM}}%
+- Disk Usage: {{DISK}}
+- Uptime: {{UPTIME}}
+- Online Users: {{USERS}}
+
+Services:
+- Xray: {{XRAY_STATUS}}
+- SSH: {{SSH_STATUS}}
+
+Owner: @maut_coder
+Powered by MAUT CODER
+EOF
+    fi
+    
+    echo -e "${COLOR_INFO}Opening banner for editing...${COLOR_RESET}"
+    echo -e "${COLOR_INFO}You can use the following placeholders:${COLOR_RESET}"
+    echo "{{CPU}} - CPU usage"
+    echo "{{MEM}} - Memory usage"
+    echo "{{DISK}} - Disk usage"
+    echo "{{UPTIME}} - System uptime"
+    echo "{{USERS}} - Online users"
+    echo "{{XRAY_STATUS}} - Xray service status"
+    echo "{{SSH_STATUS}} - SSH service status"
+    echo "{{IP}} - Server IP"
+    echo "{{DATE}} - Current date"
+    echo ""
+    echo -e "${COLOR_WARNING}Press Ctrl+X then Y to save, or Ctrl+C to cancel${COLOR_RESET}"
+    echo ""
+    
+    read -p "Press Enter to open editor..."
+    
+    # Use nano editor if available, otherwise vi
+    if command -v nano &> /dev/null; then
+        nano "$temp_banner"
+    else
+        vi "$temp_banner"
+    fi
+    
+    if [ $? -eq 0 ]; then
+        # Replace placeholders with actual values
+        get_banner_info
+        
+        local xray_status="Running"
+        local ssh_status="Running"
+        
+        if ! systemctl is-active --quiet xray; then
+            xray_status="Stopped"
+        fi
+        
+        if ! systemctl is-active --quiet ssh; then
+            ssh_status="Stopped"
+        fi
+        
+        # Process the template
+        sed -i \
+            -e "s/{{CPU}}/$CPU_USAGE/g" \
+            -e "s/{{MEM}}/$MEM_USAGE_PERCENT/g" \
+            -e "s/{{DISK}}/$DISK_USAGE/g" \
+            -e "s/{{UPTIME}}/$UPTIME/g" \
+            -e "s/{{USERS}}/$ONLINE_USERS/g" \
+            -e "s/{{XRAY_STATUS}}/$xray_status/g" \
+            -e "s/{{SSH_STATUS}}/$ssh_status/g" \
+            -e "s/{{IP}}/$SERVER_IP/g" \
+            -e "s/{{DATE}}/$CURRENT_DATE/g" \
+            "$temp_banner"
+        
+        # Install the custom banner
+        cp "$temp_banner" "$BANNER_FILE"
+        rm -f "$temp_banner"
+        
+        echo -e "${COLOR_SUCCESS}Custom banner created!${COLOR_RESET}"
+        log_banner "Created custom banner"
+    else
+        echo -e "${COLOR_ERROR}Banner editing cancelled${COLOR_RESET}"
+        rm -f "$temp_banner"
+    fi
+}
+
+# View current banner
+view_current_banner() {
+    echo -e "${COLOR_INFO}Current Banner Content${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    if [[ -f "$BANNER_FILE" ]]; then
+        cat "$BANNER_FILE"
+    else
+        echo -e "${COLOR_WARNING}No banner file found${COLOR_RESET}"
+    fi
+}
+
+# Disable banner
+disable_banner() {
+    echo -e "${COLOR_INFO}Disable SSH Banner${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_WARNING}This will disable the SSH banner${COLOR_RESET}"
+    read -p "Are you sure? (y/N): " confirm
+    
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        # Comment out Banner line in SSH config
+        sed -i 's/^Banner/#Banner/' /etc/ssh/sshd_config
+        
+        # Restart SSH service
+        systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+        
+        echo -e "${COLOR_SUCCESS}SSH banner disabled${COLOR_RESET}"
+        log_banner "Disabled SSH banner"
+    else
+        echo "Operation cancelled"
+    fi
+}
+
+# Restore original banner
+restore_original_banner() {
+    echo -e "${COLOR_INFO}Restore Original Banner${COLOR_RESET}"
+    echo ""
+    
+    if [[ -f "$BANNER_BACKUP" ]]; then
+        cp "$BANNER_BACKUP" "$BANNER_FILE"
+        echo -e "${COLOR_SUCCESS}Original banner restored${COLOR_RESET}"
+        log_banner "Restored original banner"
+    else
+        echo -e "${COLOR_WARNING}No backup found to restore${COLOR_RESET}"
+        
+        # Remove current banner
+        if [[ -f "$BANNER_FILE" ]]; then
+            rm -f "$BANNER_FILE"
+            echo -e "${COLOR_SUCCESS}Banner file removed${COLOR_RESET}"
+        fi
+    fi
+}
+
+# Banner preview
+preview_banner() {
+    echo -e "${COLOR_INFO}Banner Preview${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    echo -e "${COLOR_WARNING}This is how the banner will appear when users SSH in:${COLOR_RESET}"
+    echo ""
+    
+    if [[ -f "$BANNER_FILE" ]]; then
+        # Use cat to show the banner with colors
+        cat "$BANNER_FILE"
+    else
+        echo -e "${COLOR_WARNING}No banner file found. Create one first.${COLOR_RESET}"
+    fi
+}
+
+# Banner menu
+show_banner_menu() {
+    clear
+    load_theme
+    
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║            BANNER MANAGER           ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Manage SSH login banner and appearance${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Check banner status
+    if [[ -f "$BANNER_FILE" ]]; then
+        echo -e "${COLOR_SUCCESS}✓ Banner is active${COLOR_RESET}"
+    else
+        echo -e "${COLOR_WARNING}⚠ Banner is not active${COLOR_RESET}"
+    fi
+    
+    # Check SSH banner configuration
+    if grep -q "^Banner" /etc/ssh/sshd_config; then
+        echo -e "${COLOR_SUCCESS}✓ SSH banner is enabled${COLOR_RESET}"
+    else
+        echo -e "${COLOR_WARNING}⚠ SSH banner is disabled${COLOR_RESET}"
+    fi
+    
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}BANNER MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Create Default Banner"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Create Custom Banner"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} View Current Banner"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Preview Banner"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Update Banner (Refresh Stats)"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Enable SSH Banner"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Disable SSH Banner"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Restore Original Banner"
+    echo -e "${COLOR_SUCCESS}09${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main banner function
+main() {
+    load_theme
+    
+    # Handle update if argument passed
+    if [[ "$1" == "update" ]]; then
+        update_banner
+        return
+    fi
+    
+    # Handle create if argument passed
+    if [[ "$1" == "create" ]]; then
+        create_default_banner
+        return
+    fi
+    
+    while true; do
+        show_banner_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) create_default_banner ;;
+            02) create_custom_banner ;;
+            03) view_current_banner ;;
+            04) preview_banner ;;
+            05) update_banner ;;
+            06) enable_ssh_banner ;;
+            07) disable_banner ;;
+            08) restore_original_banner ;;
+            09) 
+                log_banner "Exited Banner Manager"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

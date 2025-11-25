@@ -1,0 +1,428 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - SYSTEM MONITOR
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+MONITOR_LOG="$LOG_DIR/maut-monitor.log"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_monitor() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - MONITOR: $1" >> "$MONITOR_LOG"
+}
+
+# Get system information
+get_system_info() {
+    # CPU usage
+    CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1"%"}')
+    
+    # Memory usage
+    MEM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
+    MEM_USED=$(free -m | awk '/Mem:/ {print $3}')
+    MEM_FREE=$(free -m | awk '/Mem:/ {print $4}')
+    MEM_USAGE_PERCENT=$((MEM_USED * 100 / MEM_TOTAL))
+    
+    # Swap usage
+    SWAP_TOTAL=$(free -m | awk '/Swap:/ {print $2}')
+    SWAP_USED=$(free -m | awk '/Swap:/ {print $3}')
+    if [[ $SWAP_TOTAL -gt 0 ]]; then
+        SWAP_USAGE_PERCENT=$((SWAP_USED * 100 / SWAP_TOTAL))
+    else
+        SWAP_USAGE_PERCENT=0
+    fi
+    
+    # Disk usage
+    DISK_USAGE=$(df / | awk 'NR==2 {print $5}')
+    DISK_USED=$(df / | awk 'NR==2 {print $3}')
+    DISK_AVAILABLE=$(df / | awk 'NR==2 {print $4}')
+    
+    # Uptime
+    UPTIME=$(uptime -p | sed 's/up //')
+    
+    # Load average
+    LOAD_AVG=$(uptime | awk -F'load average:' '{print $2}' | xargs)
+    
+    # Online users
+    ONLINE_USERS=$(who | wc -l)
+}
+
+# Display system status
+show_system_status() {
+    get_system_info
+    
+    echo -e "${COLOR_INFO}System Status - $(date)${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # CPU and Memory
+    echo -e "${COLOR_SUCCESS}CPU Usage:${COLOR_RESET} $CPU_USAGE"
+    echo -e "${COLOR_SUCCESS}Load Average:${COLOR_RESET} $LOAD_AVG"
+    echo ""
+    echo -e "${COLOR_SUCCESS}Memory:${COLOR_RESET} ${MEM_USED}MB / ${MEM_TOTAL}MB (${MEM_USAGE_PERCENT}%)"
+    echo -e "${COLOR_SUCCESS}Swap:${COLOR_RESET} ${SWAP_USED}MB / ${SWAP_TOTAL}MB (${SWAP_USAGE_PERCENT}%)"
+    echo ""
+    echo -e "${COLOR_SUCCESS}Disk Usage:${COLOR_RESET} $DISK_USAGE"
+    echo -e "${COLOR_SUCCESS}Disk Available:${COLOR_RESET} ${DISK_AVAILABLE}MB"
+    echo ""
+    echo -e "${COLOR_SUCCESS}Uptime:${COLOR_RESET} $UPTIME"
+    echo -e "${COLOR_SUCCESS}Online Users:${COLOR_RESET} $ONLINE_USERS"
+}
+
+# Check service status
+check_service_status() {
+    echo -e "${COLOR_INFO}Service Status${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    local services=("xray" "ssh" "nginx" "cron")
+    
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "✓ $service: ${COLOR_SUCCESS}Running${COLOR_RESET}"
+        else
+            echo -e "✗ $service: ${COLOR_ERROR}Stopped${COLOR_RESET}"
+        fi
+    done
+}
+
+# Show network connections
+show_network_connections() {
+    echo -e "${COLOR_INFO}Network Connections${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Show listening ports
+    echo -e "${COLOR_SUCCESS}Listening Ports:${COLOR_RESET}"
+    netstat -tulpn | grep LISTEN | head -15
+    
+    echo ""
+    
+    # Show active connections
+    echo -e "${COLOR_SUCCESS}Active Connections:${COLOR_RESET}"
+    netstat -an | grep ESTABLISHED | wc -l
+    echo "Total established connections"
+}
+
+# Show process information
+show_process_info() {
+    echo -e "${COLOR_INFO}Top Processes by CPU${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head -10
+    
+    echo ""
+    echo -e "${COLOR_INFO}Top Processes by Memory${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -10
+}
+
+# Show Xray statistics
+show_xray_stats() {
+    echo -e "${COLOR_INFO}Xray Statistics${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    if systemctl is-active --quiet xray; then
+        # Show Xray process info
+        local xray_pid=$(pgrep xray)
+        if [[ -n "$xray_pid" ]]; then
+            echo -e "${COLOR_SUCCESS}Xray Process:${COLOR_RESET}"
+            ps -p "$xray_pid" -o pid,ppid,cmd,%mem,%cpu --no-headers
+            echo ""
+            
+            # Show memory usage
+            local xray_mem=$(ps -p "$xray_pid" -o rss --no-headers | awk '{printf "%.2f MB", $1/1024}')
+            echo -e "Memory Usage: $xray_mem"
+        fi
+        
+        # Show recent log entries
+        local xray_log="/var/log/xray/access.log"
+        if [[ -f "$xray_log" ]]; then
+            echo ""
+            echo -e "${COLOR_SUCCESS}Recent Activity:${COLOR_RESET}"
+            local recent_count=$(tail -100 "$xray_log" | wc -l)
+            echo "Last 100 log entries: $recent_count"
+            
+            # Count accepted/rejected connections
+            local accepted=$(grep -c "accepted" "$xray_log" 2>/dev/null || echo "0")
+            local rejected=$(grep -c "rejected" "$xray_log" 2>/dev/null || echo "0")
+            echo "Accepted: $accepted, Rejected: $rejected"
+        fi
+    else
+        echo -e "${COLOR_ERROR}Xray service is not running${COLOR_RESET}"
+    fi
+}
+
+# Monitor system resources in real-time
+real_time_monitor() {
+    echo -e "${COLOR_INFO}Real-time System Monitor${COLOR_RESET}"
+    echo -e "${COLOR_WARNING}Press Ctrl+C to stop monitoring${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    local delay=2
+    
+    while true; do
+        clear
+        echo -e "${COLOR_INFO}Real-time Monitor - $(date)${COLOR_RESET}"
+        echo "════════════════════════════════════════"
+        echo ""
+        
+        get_system_info
+        
+        # Display key metrics
+        echo -e "CPU: $CPU_USAGE | Memory: ${MEM_USAGE_PERCENT}% | Disk: $DISK_USAGE"
+        echo -e "Load: $LOAD_AVG | Users: $ONLINE_USERS"
+        echo ""
+        
+        # Show top processes
+        echo -e "${COLOR_SUCCESS}Top Processes:${COLOR_RESET}"
+        ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head -5
+        
+        echo ""
+        echo -e "${COLOR_WARNING}Refreshing every ${delay} seconds... Ctrl+C to exit${COLOR_RESET}"
+        
+        sleep $delay
+    done
+}
+
+# Check system health
+check_system_health() {
+    echo -e "${COLOR_INFO}System Health Check${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    local warnings=0
+    local errors=0
+    
+    get_system_info
+    
+    # Check CPU load
+    local load1=$(echo "$LOAD_AVG" | cut -d, -f1 | xargs)
+    if (( $(echo "$load1 > 2.0" | bc -l 2>/dev/null || echo "0") )); then
+        echo -e "⚠ ${COLOR_WARNING}High CPU load: $load1${COLOR_RESET}"
+        ((warnings++))
+    else
+        echo -e "✓ CPU load: $load1"
+    fi
+    
+    # Check memory usage
+    if [[ $MEM_USAGE_PERCENT -gt 90 ]]; then
+        echo -e "⚠ ${COLOR_WARNING}High memory usage: ${MEM_USAGE_PERCENT}%${COLOR_RESET}"
+        ((warnings++))
+    else
+        echo -e "✓ Memory usage: ${MEM_USAGE_PERCENT}%"
+    fi
+    
+    # Check disk usage
+    local disk_percent=$(echo "$DISK_USAGE" | tr -d '%')
+    if [[ $disk_percent -gt 90 ]]; then
+        echo -e "⚠ ${COLOR_WARNING}High disk usage: $DISK_USAGE${COLOR_RESET}"
+        ((warnings++))
+    else
+        echo -e "✓ Disk usage: $DISK_USAGE"
+    fi
+    
+    # Check critical services
+    local critical_services=("xray" "ssh")
+    for service in "${critical_services[@]}"; do
+        if ! systemctl is-active --quiet "$service"; then
+            echo -e "✗ ${COLOR_ERROR}Critical service stopped: $service${COLOR_RESET}"
+            ((errors++))
+        else
+            echo -e "✓ Service running: $service"
+        fi
+    done
+    
+    echo ""
+    
+    # Summary
+    if [[ $errors -gt 0 ]]; then
+        echo -e "${COLOR_ERROR}Health Check: $errors error(s), $warnings warning(s)${COLOR_RESET}"
+        return 1
+    elif [[ $warnings -gt 0 ]]; then
+        echo -e "${COLOR_WARNING}Health Check: $warnings warning(s)${COLOR_RESET}"
+        return 2
+    else
+        echo -e "${COLOR_SUCCESS}Health Check: All systems normal${COLOR_RESET}"
+        return 0
+    fi
+}
+
+# Monitor for auto-kill conditions (for cron jobs)
+auto_monitor_check() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local status="OK"
+    
+    # Check critical services
+    if ! systemctl is-active --quiet xray; then
+        echo "$timestamp - ERROR: Xray service stopped" >> "$MONITOR_LOG"
+        status="ERROR"
+        # Auto-restart if configured
+        systemctl start xray
+        echo "$timestamp - ACTION: Attempted to restart Xray" >> "$MONITOR_LOG"
+    fi
+    
+    if ! systemctl is-active --quiet ssh; then
+        echo "$timestamp - ERROR: SSH service stopped" >> "$MONITOR_LOG"
+        status="ERROR"
+    fi
+    
+    # Check system resources
+    get_system_info
+    
+    if [[ $MEM_USAGE_PERCENT -gt 95 ]]; then
+        echo "$timestamp - WARNING: High memory usage ${MEM_USAGE_PERCENT}%" >> "$MONITOR_LOG"
+        status="WARNING"
+    fi
+    
+    local disk_percent=$(echo "$DISK_USAGE" | tr -d '%')
+    if [[ $disk_percent -gt 95 ]]; then
+        echo "$timestamp - WARNING: High disk usage $DISK_USAGE" >> "$MONITOR_LOG"
+        status="WARNING"
+    fi
+    
+    # Log status
+    if [[ "$status" == "OK" ]]; then
+        echo "$timestamp - MONITOR: System status OK" >> "$MONITOR_LOG"
+    fi
+}
+
+# Show monitor logs
+show_monitor_logs() {
+    echo -e "${COLOR_INFO}Monitor Logs${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    if [[ -f "$MONITOR_LOG" ]]; then
+        echo "1. View last 20 entries"
+        echo "2. View last 50 entries"
+        echo "3. Search in logs"
+        echo "4. Clear logs"
+        echo "5. Back to menu"
+        
+        read -p "Enter your choice: " choice
+        
+        case $choice in
+            1)
+                tail -20 "$MONITOR_LOG"
+                ;;
+            2)
+                tail -50 "$MONITOR_LOG"
+                ;;
+            3)
+                read -p "Enter search term: " term
+                grep "$term" "$MONITOR_LOG" | tail -20
+                ;;
+            4)
+                echo -n "" > "$MONITOR_LOG"
+                echo -e "${COLOR_SUCCESS}Logs cleared${COLOR_RESET}"
+                ;;
+            5)
+                return
+                ;;
+            *)
+                echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+                ;;
+        esac
+    else
+        echo -e "${COLOR_WARNING}No monitor logs found${COLOR_RESET}"
+    fi
+}
+
+# Monitor menu
+show_monitor_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║           SYSTEM MONITOR            ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Monitor system resources and services${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Show quick status
+    get_system_info
+    echo -e "${COLOR_SUCCESS}Quick Status:${COLOR_RESET}"
+    echo -e "CPU: $CPU_USAGE | Memory: ${MEM_USAGE_PERCENT}% | Disk: $DISK_USAGE"
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}MONITOR MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} System Status"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Service Status"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} Network Connections"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Process Information"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Xray Statistics"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Real-time Monitor"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} System Health Check"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Monitor Logs"
+    echo -e "${COLOR_SUCCESS}09${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main monitor function
+main() {
+    load_theme
+    
+    # Handle auto monitor if argument passed
+    if [[ "$1" == "check" ]]; then
+        auto_monitor_check
+        return
+    fi
+    
+    while true; do
+        show_monitor_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) show_system_status ;;
+            02) check_service_status ;;
+            03) show_network_connections ;;
+            04) show_process_info ;;
+            05) show_xray_stats ;;
+            06) real_time_monitor ;;
+            07) check_system_health ;;
+            08) show_monitor_logs ;;
+            09) 
+                log_monitor "Exited System Monitor"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

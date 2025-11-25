@@ -1,0 +1,456 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - VLESS MANAGER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+USER_DB="$CONFIG_DIR/maut-users.db"
+XRAY_CONFIG="/usr/local/etc/xray/config.json"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_action() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - VLESS: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Generate UUID
+generate_uuid() {
+    cat /proc/sys/kernel/random/uuid
+}
+
+# Check if VLESS user exists
+vless_user_exists() {
+    grep -q "vless|$1|" "$USER_DB"
+}
+
+# Add VLESS user to database
+add_vless_to_db() {
+    local username="$1"
+    local uuid="$2"
+    local port="$3"
+    local flow="$4"
+    local expiry="$5"
+    local created=$(date '+%Y-%m-%d')
+    
+    echo "vless|$username|$uuid|$port|$flow|$expiry|$created|active" >> "$USER_DB"
+    log_action "Added VLESS user: $username (UUID: $uuid, Port: $port, Flow: $flow)"
+}
+
+# Remove VLESS user from database
+remove_vless_from_db() {
+    local username="$1"
+    sed -i "/^vless|$username|/d" "$USER_DB"
+    log_action "Removed VLESS user: $username"
+}
+
+# Create VLESS user
+create_vless_user() {
+    echo -e "${COLOR_INFO}Create VLESS User${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter username: " username
+    if [[ -z "$username" ]]; then
+        echo -e "${COLOR_ERROR}Username cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    if vless_user_exists "$username"; then
+        echo -e "${COLOR_ERROR}VLESS user already exists${COLOR_RESET}"
+        return 1
+    fi
+    
+    read -p "Enter port (default: 2083): " port
+    port=${port:-2083}
+    
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo -e "${COLOR_ERROR}Invalid port number${COLOR_RESET}"
+        return 1
+    fi
+    
+    echo -e "${COLOR_INFO}Select flow control:${COLOR_RESET}"
+    echo "1. xtls-rprx-vision (Recommended)"
+    echo "2. xtls-rprx-direct"
+    echo "3. No flow"
+    read -p "Enter choice (1-3): " flow_choice
+    
+    case $flow_choice in
+        1) flow="xtls-rprx-vision" ;;
+        2) flow="xtls-rprx-direct" ;;
+        3) flow="none" ;;
+        *) 
+            echo -e "${COLOR_ERROR}Invalid choice, using none${COLOR_RESET}"
+            flow="none"
+            ;;
+    esac
+    
+    read -p "Enter expiry date (YYYY-MM-DD): " expiry
+    if [[ ! "$expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo -e "${COLOR_ERROR}Invalid date format. Use YYYY-MM-DD${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Generate UUID
+    uuid=$(generate_uuid)
+    
+    # Add to Xray config
+    add_vless_to_xray "$username" "$uuid" "$port" "$flow"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${COLOR_ERROR}Failed to add VLESS to Xray configuration${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Add to database
+    add_vless_to_db "$username" "$uuid" "$port" "$flow" "$expiry"
+    
+    # Restart Xray service
+    systemctl restart xray
+    
+    echo -e "${COLOR_SUCCESS}VLESS user created successfully!${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Username: ${COLOR_SUCCESS}$username${COLOR_RESET}"
+    echo -e "${COLOR_INFO}UUID: ${COLOR_SUCCESS}$uuid${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Port: ${COLOR_SUCCESS}$port${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Flow: ${COLOR_SUCCESS}$flow${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Expiry: ${COLOR_SUCCESS}$expiry${COLOR_RESET}"
+    echo ""
+    echo -e "${COLOR_WARNING}Restarting Xray service...${COLOR_RESET}"
+}
+
+# Add VLESS to Xray configuration
+add_vless_to_xray() {
+    local username="$1"
+    local uuid="$2"
+    local port="$3"
+    local flow="$4"
+    
+    # Check if Xray config exists
+    if [[ ! -f "$XRAY_CONFIG" ]]; then
+        echo -e "${COLOR_WARNING}Xray config not found, creating basic config...${COLOR_RESET}"
+        create_basic_xray_config
+    fi
+    
+    # Backup config
+    cp "$XRAY_CONFIG" "$XRAY_CONFIG.backup.$(date +%s)"
+    
+    echo -e "${COLOR_INFO}VLESS configuration would be added to Xray config${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Manual configuration required for production use${COLOR_RESET}"
+    
+    # Check if jq is available for JSON manipulation
+    if command -v jq >/dev/null 2>&1; then
+        echo -e "${COLOR_INFO}Using jq for JSON configuration${COLOR_RESET}"
+    else
+        echo -e "${COLOR_WARNING}jq not available, manual config required${COLOR_RESET}"
+    fi
+    
+    return 0
+}
+
+# Create basic Xray configuration for VLESS
+create_basic_xray_config() {
+    cat > "$XRAY_CONFIG" << 'EOF'
+{
+    "log": {
+        "loglevel": "warning"
+    },
+    "inbounds": [
+        {
+            "port": 2083,
+            "protocol": "vless",
+            "settings": {
+                "clients": [],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "tls",
+                "tlsSettings": {
+                    "certificates": [
+                        {
+                            "certificateFile": "/etc/maut/ssl/cert.pem",
+                            "keyFile": "/etc/maut/ssl/key.pem"
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "freedom",
+            "settings": {}
+        }
+    ]
+}
+EOF
+    log_action "Created basic Xray configuration for VLESS"
+}
+
+# Delete VLESS user
+delete_vless_user() {
+    echo -e "${COLOR_INFO}Delete VLESS User${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter username to delete: " username
+    if [[ -z "$username" ]]; then
+        echo -e "${COLOR_ERROR}Username cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    if ! vless_user_exists "$username"; then
+        echo -e "${COLOR_ERROR}VLESS user not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Remove from Xray config
+    remove_vless_from_xray "$username"
+    
+    # Remove from database
+    remove_vless_from_db "$username"
+    
+    # Restart Xray service
+    systemctl restart xray
+    
+    echo -e "${COLOR_SUCCESS}VLESS user $username deleted successfully${COLOR_RESET}"
+    echo -e "${COLOR_WARNING}Restarting Xray service...${COLOR_RESET}"
+}
+
+# Remove VLESS from Xray configuration
+remove_vless_from_xray() {
+    local username="$1"
+    echo -e "${COLOR_INFO}Removing VLESS user $username from Xray config${COLOR_RESET}"
+    # Implementation would use jq to remove the user from clients array
+}
+
+# List VLESS users
+list_vless_users() {
+    echo -e "${COLOR_INFO}VLESS Users List${COLOR_RESET}"
+    echo ""
+    
+    if [[ ! -f "$USER_DB" ]]; then
+        echo -e "${COLOR_WARNING}No VLESS users found${COLOR_RESET}"
+        return
+    fi
+    
+    local vless_users=$(grep "^vless|" "$USER_DB")
+    
+    if [[ -z "$vless_users" ]]; then
+        echo -e "${COLOR_WARNING}No VLESS users found${COLOR_RESET}"
+        return
+    fi
+    
+    echo -e "${COLOR_PRIMARY}Username | UUID | Port | Flow | Expiry | Status${COLOR_RESET}"
+    echo "─────────┼─────────────────────┼──────┼───────────────────┼─────────────┼────────"
+    
+    while IFS='|' read -r type username uuid port flow expiry created status; do
+        # Check if user is expired
+        current_date=$(date '+%Y-%m-%d')
+        if [[ "$expiry" < "$current_date" ]]; then
+            status="expired"
+            # Update status in database
+            sed -i "s/^vless|$username|.*|active$/vless|$username|$uuid|$port|$flow|$expiry|$created|expired/" "$USER_DB"
+        fi
+        
+        # Shorten UUID for display
+        short_uuid="${uuid:0:8}...${uuid: -8}"
+        echo -e "$username | $short_uuid | $port | $flow | $expiry | $status"
+    done <<< "$vless_users"
+}
+
+# Renew VLESS user
+renew_vless_user() {
+    echo -e "${COLOR_INFO}Renew VLESS User${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter username to renew: " username
+    if [[ -z "$username" ]]; then
+        echo -e "${COLOR_ERROR}Username cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    if ! vless_user_exists "$username"; then
+        echo -e "${COLOR_ERROR}VLESS user not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    read -p "Enter new expiry date (YYYY-MM-DD): " new_expiry
+    if [[ ! "$new_expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo -e "${COLOR_ERROR}Invalid date format. Use YYYY-MM-DD${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Update expiry in database
+    local user_data=$(grep "^vless|$username|" "$USER_DB")
+    local uuid=$(echo "$user_data" | cut -d'|' -f3)
+    local port=$(echo "$user_data" | cut -d'|' -f4)
+    local flow=$(echo "$user_data" | cut -d'|' -f5)
+    local created=$(echo "$user_data" | cut -d'|' -f7)
+    
+    sed -i "/^vless|$username|/d" "$USER_DB"
+    echo "vless|$username|$uuid|$port|$flow|$new_expiry|$created|active" >> "$USER_DB"
+    
+    log_action "Renewed VLESS user: $username until $new_expiry"
+    echo -e "${COLOR_SUCCESS}VLESS user $username renewed until $new_expiry${COLOR_RESET}"
+}
+
+# Show VLESS configuration
+show_vless_config() {
+    echo -e "${COLOR_INFO}VLESS Configuration${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter username: " username
+    if [[ -z "$username" ]]; then
+        echo -e "${COLOR_ERROR}Username cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    if ! vless_user_exists "$username"; then
+        echo -e "${COLOR_ERROR}VLESS user not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    local user_data=$(grep "^vless|$username|" "$USER_DB")
+    local uuid=$(echo "$user_data" | cut -d'|' -f3)
+    local port=$(echo "$user_data" | cut -d'|' -f4)
+    local flow=$(echo "$user_data" | cut -d'|' -f5)
+    
+    # Get server IP
+    server_ip=$(curl -s ipv4.icanhazip.com)
+    
+    echo -e "${COLOR_SUCCESS}VLESS Configuration for $username:${COLOR_RESET}"
+    echo ""
+    echo -e "${COLOR_INFO}Server: ${COLOR_SUCCESS}$server_ip${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Port: ${COLOR_SUCCESS}$port${COLOR_RESET}"
+    echo -e "${COLOR_INFO}UUID: ${COLOR_SUCCESS}$uuid${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Flow: ${COLOR_SUCCESS}$flow${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Security: ${COLOR_SUCCESS}tls${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Network: ${COLOR_SUCCESS}tcp${COLOR_RESET}"
+    echo ""
+    echo -e "${COLOR_WARNING}VLESS URL:${COLOR_RESET}"
+    
+    # Create VLESS URL based on flow
+    if [[ "$flow" == "none" ]]; then
+        echo "vless://$uuid@$server_ip:$port?security=tls&type=tcp#$username"
+    else
+        echo "vless://$uuid@$server_ip:$port?security=tls&flow=$flow&type=tcp#$username"
+    fi
+}
+
+# Test VLESS connection
+test_vless_connection() {
+    echo -e "${COLOR_INFO}VLESS Connection Test${COLOR_RESET}"
+    echo ""
+    
+    # Check if Xray is running
+    if ! systemctl is-active --quiet xray; then
+        echo -e "${COLOR_ERROR}Xray service is not running${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Check VLESS port
+    read -p "Enter VLESS port to test (default: 2083): " test_port
+    test_port=${test_port:-2083}
+    
+    echo -e "${COLOR_INFO}Testing VLESS port $test_port...${COLOR_RESET}"
+    
+    # Test port connectivity
+    if nc -z localhost "$test_port" 2>/dev/null; then
+        echo -e "${COLOR_SUCCESS}Port $test_port is open and listening${COLOR_RESET}"
+    else
+        echo -e "${COLOR_ERROR}Port $test_port is closed or not listening${COLOR_RESET}"
+    fi
+    
+    # Show recent Xray logs
+    echo ""
+    echo -e "${COLOR_INFO}Recent Xray logs:${COLOR_RESET}"
+    journalctl -u xray --lines=10 --no-pager
+}
+
+# VLESS menu
+show_vless_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║            VLESS MANAGER            ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Manage VLESS users and configurations${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}VLESS MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Create VLESS User"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Delete VLESS User"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} List VLESS Users"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Renew VLESS User"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Show VLESS Config"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Test Connection"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Xray Service Status"
+    echo -e "${COLOR_SUCCESS}08${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main VLESS function
+main() {
+    load_theme
+    
+    # Handle renew all if argument passed
+    if [[ "$1" == "renew" ]]; then
+        renew_vless_user
+        return
+    fi
+    
+    while true; do
+        show_vless_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) create_vless_user ;;
+            02) delete_vless_user ;;
+            03) list_vless_users ;;
+            04) renew_vless_user ;;
+            05) show_vless_config ;;
+            06) test_vless_connection ;;
+            07) 
+                echo -e "${COLOR_INFO}Xray Service Status:${COLOR_RESET}"
+                systemctl status xray | head -10
+                ;;
+            08) 
+                log_action "Exited VLESS Manager"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"

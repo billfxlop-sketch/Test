@@ -1,0 +1,423 @@
+#!/bin/bash
+
+# MAUT PANEL PRO EDITION - AUTO KILL MULTI-LOGIN MANAGER
+# Owner: @maut_coder
+# Powered by MAUT CODER
+
+# Configuration
+PANEL_DIR="/opt/maut-panel"
+CONFIG_DIR="$PANEL_DIR/config"
+SCRIPT_DIR="$PANEL_DIR/scripts"
+LOG_DIR="/var/log/maut-panel"
+KILL_CONFIG="$CONFIG_DIR/maut-kill.conf"
+THEME_FILE="$CONFIG_DIR/maut-theme.conf"
+
+# Load theme
+load_theme() {
+    if [[ -f "$THEME_FILE" ]]; then
+        source "$THEME_FILE"
+    else
+        COLOR_PRIMARY='\033[0;31m'
+        COLOR_SECONDARY='\033[0;33m'
+        COLOR_ACCENT='\033[0;36m'
+        COLOR_SUCCESS='\033[0;32m'
+        COLOR_WARNING='\033[1;33m'
+        COLOR_ERROR='\033[0;31m'
+        COLOR_INFO='\033[0;34m'
+        COLOR_RESET='\033[0m'
+    fi
+}
+
+# Logging
+log_action() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - AUTO-KILL: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Load kill configuration
+load_kill_config() {
+    if [[ ! -f "$KILL_CONFIG" ]]; then
+        # Create default configuration
+        cat > "$KILL_CONFIG" << 'EOF'
+# MAUT PANEL PRO - Auto Kill Multi-Login Configuration
+AUTO_KILL_ENABLED="true"
+MAX_CONNECTIONS_PER_USER="2"
+CHECK_INTERVAL="60"
+EXCLUDE_USERS=("root" "admin")
+KILL_METHOD="graceful"  # graceful or force
+LOG_ACTIONS="true"
+SEND_NOTIFICATIONS="false"
+EOF
+    fi
+    
+    source "$KILL_CONFIG"
+}
+
+# Show current connections
+show_current_connections() {
+    echo -e "${COLOR_INFO}Current SSH Connections${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    local connections=$(who)
+    
+    if [[ -z "$connections" ]]; then
+        echo -e "${COLOR_WARNING}No active SSH connections${COLOR_RESET}"
+        return
+    fi
+    
+    # Count connections per user
+    declare -A user_counts
+    declare -A user_ips
+    
+    while read -r user line; do
+        local ip=$(echo "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
+        if [[ -n "$user" ]]; then
+            ((user_counts["$user"]++))
+            user_ips["$user"]+="$ip "
+        fi
+    done <<< "$connections"
+    
+    echo -e "${COLOR_PRIMARY}User | Connections | IP Addresses${COLOR_RESET}"
+    echo "─────┼─────────────┼────────────────"
+    
+    for user in "${!user_counts[@]}"; do
+        local count=${user_counts["$user"]}
+        local ips=$(echo "${user_ips["$user"]}" | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+        
+        if [[ $count -gt $MAX_CONNECTIONS_PER_USER ]]; then
+            echo -e "$user | ${COLOR_ERROR}$count${COLOR_RESET} | $ips"
+        else
+            echo -e "$user | ${COLOR_SUCCESS}$count${COLOR_RESET} | $ips"
+        fi
+    done
+    
+    echo ""
+    echo -e "${COLOR_INFO}Connection Limit: $MAX_CONNECTIONS_PER_USER per user${COLOR_RESET}"
+}
+
+# Auto kill multi-login users
+auto_kill_multi_login() {
+    load_kill_config
+    
+    if [[ "$AUTO_KILL_ENABLED" != "true" ]]; then
+        echo -e "${COLOR_WARNING}Auto kill is disabled${COLOR_RESET}"
+        return
+    fi
+    
+    echo -e "${COLOR_INFO}Checking for multi-login users...${COLOR_RESET}"
+    
+    # Get current SSH connections with PIDs
+    local connections=$(ps aux | grep sshd: | grep -v grep | awk '{print $1, $2}' | sort)
+    
+    # Count connections per user and get PIDs
+    declare -A user_connections
+    declare -A user_pids
+    
+    while read -r user pid; do
+        if [[ -n "$user" && -n "$pid" ]]; then
+            # Skip excluded users
+            if [[ " ${EXCLUDE_USERS[@]} " =~ " ${user} " ]]; then
+                continue
+            fi
+            
+            ((user_connections["$user"]++))
+            user_pids["$user"]+="$pid "
+        fi
+    done <<< "$connections"
+    
+    local killed_count=0
+    
+    # Kill sessions for users with more than max connections
+    for user in "${!user_connections[@]}"; do
+        local count=${user_connections["$user"]}
+        
+        if [[ $count -gt $MAX_CONNECTIONS_PER_USER ]]; then
+            echo -e "${COLOR_WARNING}User $user has $count connections (limit: $MAX_CONNECTIONS_PER_USER) - cleaning up...${COLOR_RESET}"
+            
+            # Get all PIDs for this user
+            local pids=(${user_pids["$user"]})
+            local pids_to_keep=$((MAX_CONNECTIONS_PER_USER))
+            local pids_to_kill=()
+            
+            # Keep the first few PIDs, kill the rest
+            for ((i=0; i<${#pids[@]}; i++)); do
+                if [[ $i -ge $pids_to_keep ]]; then
+                    pids_to_kill+=("${pids[$i]}")
+                fi
+            done
+            
+            # Kill the excess connections
+            for pid in "${pids_to_kill[@]}"; do
+                if [[ -n "$pid" ]] && ps -p "$pid" > /dev/null 2>&1; then
+                    if [[ "$KILL_METHOD" == "force" ]]; then
+                        kill -9 "$pid" 2>/dev/null
+                    else
+                        kill -TERM "$pid" 2>/dev/null
+                    fi
+                    
+                    if [[ $? -eq 0 ]]; then
+                        echo -e "${COLOR_SUCCESS}Killed SSH session (PID: $pid) for user $user${COLOR_RESET}"
+                        ((killed_count++))
+                        
+                        if [[ "$LOG_ACTIONS" == "true" ]]; then
+                            log_action "Killed multi-login session for $user (PID: $pid)"
+                        fi
+                    fi
+                fi
+            done
+        fi
+    done
+    
+    if [[ $killed_count -eq 0 ]]; then
+        echo -e "${COLOR_SUCCESS}No multi-login violations detected${COLOR_RESET}"
+    else
+        echo -e "${COLOR_SUCCESS}Cleaned up $killed_count multi-login sessions${COLOR_RESET}"
+    fi
+}
+
+# Manual kill user sessions
+manual_kill_user_sessions() {
+    echo -e "${COLOR_INFO}Manual User Session Kill${COLOR_RESET}"
+    echo ""
+    
+    read -p "Enter username to kill sessions: " username
+    if [[ -z "$username" ]]; then
+        echo -e "${COLOR_ERROR}Username cannot be empty${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Check if user exists
+    if ! id "$username" &>/dev/null; then
+        echo -e "${COLOR_ERROR}User $username does not exist${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Get user's SSH sessions
+    local sessions=$(ps aux | grep "sshd: $username" | grep -v grep | awk '{print $2}')
+    local session_count=$(echo "$sessions" | wc -w)
+    
+    if [[ $session_count -eq 0 ]]; then
+        echo -e "${COLOR_WARNING}No active sessions found for user $username${COLOR_RESET}"
+        return
+    fi
+    
+    echo -e "${COLOR_WARNING}Found $session_count active sessions for $username${COLOR_RESET}"
+    read -p "Kill all sessions? (y/N): " confirm
+    
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        local killed=0
+        for pid in $sessions; do
+            if kill -TERM "$pid" 2>/dev/null; then
+                echo -e "${COLOR_SUCCESS}Killed session (PID: $pid)${COLOR_RESET}"
+                ((killed++))
+                log_action "Manually killed session for $username (PID: $pid)"
+            fi
+        done
+        echo -e "${COLOR_SUCCESS}Killed $killed sessions for user $username${COLOR_RESET}"
+    else
+        echo "Operation cancelled"
+    fi
+}
+
+# Configure auto kill settings
+configure_kill_settings() {
+    load_kill_config
+    
+    echo -e "${COLOR_INFO}Configure Auto Kill Settings${COLOR_RESET}"
+    echo ""
+    
+    echo "Current Settings:"
+    echo "1. Auto Kill Enabled: $AUTO_KILL_ENABLED"
+    echo "2. Max Connections Per User: $MAX_CONNECTIONS_PER_USER"
+    echo "3. Check Interval: $CHECK_INTERVAL seconds"
+    echo "4. Kill Method: $KILL_METHOD"
+    echo "5. Log Actions: $LOG_ACTIONS"
+    echo "6. Excluded Users: ${EXCLUDE_USERS[*]}"
+    echo "7. Back to Menu"
+    
+    read -p "Select setting to change (1-7): " choice
+    
+    case $choice in
+        1)
+            read -p "Enable auto kill? (true/false): " new_value
+            if [[ "$new_value" == "true" || "$new_value" == "false" ]]; then
+                sed -i "s/AUTO_KILL_ENABLED=.*/AUTO_KILL_ENABLED=\"$new_value\"/" "$KILL_CONFIG"
+                echo -e "${COLOR_SUCCESS}Auto kill enabled: $new_value${COLOR_RESET}"
+            else
+                echo -e "${COLOR_ERROR}Invalid value. Use 'true' or 'false'${COLOR_RESET}"
+            fi
+            ;;
+        2)
+            read -p "Enter max connections per user: " new_value
+            if [[ "$new_value" =~ ^[0-9]+$ ]] && [[ $new_value -gt 0 ]]; then
+                sed -i "s/MAX_CONNECTIONS_PER_USER=.*/MAX_CONNECTIONS_PER_USER=\"$new_value\"/" "$KILL_CONFIG"
+                echo -e "${COLOR_SUCCESS}Max connections set to: $new_value${COLOR_RESET}"
+            else
+                echo -e "${COLOR_ERROR}Invalid number${COLOR_RESET}"
+            fi
+            ;;
+        3)
+            read -p "Enter check interval (seconds): " new_value
+            if [[ "$new_value" =~ ^[0-9]+$ ]] && [[ $new_value -ge 10 ]]; then
+                sed -i "s/CHECK_INTERVAL=.*/CHECK_INTERVAL=\"$new_value\"/" "$KILL_CONFIG"
+                echo -e "${COLOR_SUCCESS}Check interval set to: $new_value seconds${COLOR_RESET}"
+            else
+                echo -e "${COLOR_ERROR}Invalid interval (minimum 10 seconds)${COLOR_RESET}"
+            fi
+            ;;
+        4)
+            read -p "Select kill method (graceful/force): " new_value
+            if [[ "$new_value" == "graceful" || "$new_value" == "force" ]]; then
+                sed -i "s/KILL_METHOD=.*/KILL_METHOD=\"$new_value\"/" "$KILL_CONFIG"
+                echo -e "${COLOR_SUCCESS}Kill method set to: $new_value${COLOR_RESET}"
+            else
+                echo -e "${COLOR_ERROR}Invalid method. Use 'graceful' or 'force'${COLOR_RESET}"
+            fi
+            ;;
+        5)
+            read -p "Enable action logging? (true/false): " new_value
+            if [[ "$new_value" == "true" || "$new_value" == "false" ]]; then
+                sed -i "s/LOG_ACTIONS=.*/LOG_ACTIONS=\"$new_value\"/" "$KILL_CONFIG"
+                echo -e "${COLOR_SUCCESS}Action logging: $new_value${COLOR_RESET}"
+            else
+                echo -e "${COLOR_ERROR}Invalid value. Use 'true' or 'false'${COLOR_RESET}"
+            fi
+            ;;
+        6)
+            echo -e "${COLOR_INFO}Current excluded users: ${EXCLUDE_USERS[*]}${COLOR_RESET}"
+            read -p "Enter excluded users (space separated): " new_value
+            if [[ -n "$new_value" ]]; then
+                sed -i "s/EXCLUDE_USERS=.*/EXCLUDE_USERS=($new_value)/" "$KILL_CONFIG"
+                echo -e "${COLOR_SUCCESS}Excluded users updated${COLOR_RESET}"
+            fi
+            ;;
+        7)
+            return
+            ;;
+        *)
+            echo -e "${COLOR_ERROR}Invalid choice${COLOR_RESET}"
+            ;;
+    esac
+    
+    # Reload configuration
+    load_kill_config
+}
+
+# Setup cron job for auto kill
+setup_cron_job() {
+    load_kill_config
+    
+    echo -e "${COLOR_INFO}Setup Auto Kill Cron Job${COLOR_RESET}"
+    echo ""
+    
+    if [[ "$AUTO_KILL_ENABLED" != "true" ]]; then
+        echo -e "${COLOR_WARNING}Auto kill is disabled. Enable it first in settings.${COLOR_RESET}"
+        return
+    fi
+    
+    local cron_expression="*/$CHECK_INTERVAL * * * * $SCRIPT_DIR/maut-kill auto"
+    
+    echo -e "${COLOR_INFO}This will add a cron job to check every $CHECK_INTERVAL seconds${COLOR_RESET}"
+    read -p "Continue? (y/N): " confirm
+    
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        # Remove existing maut-kill cron jobs
+        crontab -l 2>/dev/null | grep -v "maut-kill auto" | crontab -
+        
+        # Add new cron job
+        (crontab -l 2>/dev/null; echo "$cron_expression") | crontab -
+        
+        echo -e "${COLOR_SUCCESS}Auto kill cron job installed${COLOR_RESET}"
+        echo -e "${COLOR_INFO}Cron expression: $cron_expression${COLOR_RESET}"
+        log_action "Installed auto kill cron job (every $CHECK_INTERVAL seconds)"
+    else
+        echo "Operation cancelled"
+    fi
+}
+
+# Remove cron job
+remove_cron_job() {
+    echo -e "${COLOR_INFO}Remove Auto Kill Cron Job${COLOR_RESET}"
+    echo ""
+    
+    read -p "Are you sure you want to remove the auto kill cron job? (y/N): " confirm
+    
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        crontab -l 2>/dev/null | grep -v "maut-kill auto" | crontab -
+        echo -e "${COLOR_SUCCESS}Auto kill cron job removed${COLOR_RESET}"
+        log_action "Removed auto kill cron job"
+    else
+        echo "Operation cancelled"
+    fi
+}
+
+# Kill menu
+show_kill_menu() {
+    clear
+    echo -e "${COLOR_PRIMARY}"
+    echo " ╔══════════════════════════════════════╗"
+    echo " ║       AUTO KILL MULTI-LOGIN         ║"
+    echo " ║           MAUT PANEL PRO            ║"
+    echo " ╚══════════════════════════════════════╝"
+    echo -e "${COLOR_RESET}"
+    echo -e "${COLOR_INFO}Manage multi-login detection and auto-kill${COLOR_RESET}"
+    echo "════════════════════════════════════════"
+    echo ""
+    
+    # Load config and show status
+    load_kill_config
+    echo -e "${COLOR_SUCCESS}Auto Kill Status: $AUTO_KILL_ENABLED${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}Max Connections: $MAX_CONNECTIONS_PER_USER${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_PRIMARY}KILL MENU:${COLOR_RESET}"
+    echo -e "${COLOR_SUCCESS}01${COLOR_RESET} Show Current Connections"
+    echo -e "${COLOR_SUCCESS}02${COLOR_RESET} Auto Kill Multi-Login"
+    echo -e "${COLOR_SUCCESS}03${COLOR_RESET} Manual Kill User Sessions"
+    echo -e "${COLOR_SUCCESS}04${COLOR_RESET} Configure Settings"
+    echo -e "${COLOR_SUCCESS}05${COLOR_RESET} Setup Cron Job"
+    echo -e "${COLOR_SUCCESS}06${COLOR_RESET} Remove Cron Job"
+    echo -e "${COLOR_SUCCESS}07${COLOR_RESET} Back to Main Menu"
+    echo ""
+}
+
+# Main kill function
+main() {
+    load_theme
+    
+    # Handle auto kill if argument passed
+    if [[ "$1" == "auto" ]]; then
+        load_kill_config
+        auto_kill_multi_login
+        return
+    fi
+    
+    while true; do
+        show_kill_menu
+        
+        read -p "Enter your choice: " choice
+        echo ""
+        
+        case $choice in
+            01) show_current_connections ;;
+            02) auto_kill_multi_login ;;
+            03) manual_kill_user_sessions ;;
+            04) configure_kill_settings ;;
+            05) setup_cron_job ;;
+            06) remove_cron_job ;;
+            07) 
+                log_action "Exited Auto Kill Manager"
+                break 
+                ;;
+            *) 
+                echo -e "${COLOR_ERROR}Invalid choice! Please try again.${COLOR_RESET}"
+                ;;
+        esac
+        
+        echo ""
+        read -p "Press Enter to continue..."
+    done
+}
+
+# Start main function
+main "$@"
