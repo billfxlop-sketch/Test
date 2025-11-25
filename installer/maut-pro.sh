@@ -63,7 +63,7 @@ show_banner() {
     echo " ███╗   ███╗ █████╗ ██╗   ██╗████████╗"
     echo " ████╗ ████║██╔══██╗██║   ██║╚══██╔══╝"
     echo " ██╔████╔██║███████║██║   ██║   ██║   "
-    echo " ██║╚██╔╝██║██╔══██║██║   ██║   ██║   "
+    echo " ██║╚██╔╝██║██╔══██║██║   ██║   �█║   "
     echo " ██║ ╚═╝ ██║██║  ██║╚██████╔╝   ██║   "
     echo " ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   "
     echo -e "${CYAN}"
@@ -116,21 +116,16 @@ update_system() {
             sleep 5
         done
         
-        # Upgrade with essential packages only - FIXED VERSION
-        if ! apt-get upgrade -y \
+        # Safe upgrade without breaking system
+        if ! apt-get dist-upgrade -y --fix-missing \
           -o Dpkg::Options::="--force-confdef" \
-          -o Dpkg::Options::="--force-confold" \
-          >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+          -o Dpkg::Options::="--force-confold" >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
 
-            warning "Standard upgrade failed, trying minimal upgrade..."
+            warning "System upgrade failed — applying repair commands..."
 
-            apt-get upgrade -y \
-              -o Dpkg::Options::="--force-confdef" \
-              -o Dpkg::Options::="--force-confold" \
-              --allow-downgrades --allow-remove-essential --allow-change-held-packages \
-              >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
-                error "Failed to upgrade system packages"
-            }
+            apt --fix-broken install -y >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
+            dpkg --configure -a >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
+            apt-get update -y --fix-missing >> "$INSTALL_LOG" 2>> "$ERROR_LOG"
         fi
     fi
     
