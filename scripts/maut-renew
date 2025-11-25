@@ -30,7 +30,26 @@ load_theme() {
 
 # Logging
 log_action() {
+    mkdir -p "$LOG_DIR"
     echo "$(date '+%Y-%m-%d %H:%M:%S') - RENEW: $1" >> "$LOG_DIR/maut-actions.log"
+}
+
+# Safe date conversion function
+get_timestamp() {
+    local date_str="$1"
+    date -d "$date_str" +%s 2>/dev/null || echo "0"
+}
+
+# Safe date addition function
+get_future_date() {
+    local days="$1"
+    date -d "now + $days days" +%Y-%m-%d
+}
+
+# Check if date is valid
+is_valid_date() {
+    local date_str="$1"
+    [[ "$date_str" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && date -d "$date_str" >/dev/null 2>&1
 }
 
 # Renew specific user
@@ -51,34 +70,36 @@ renew_specific_user() {
     fi
     
     read -p "Enter new expiry date (YYYY-MM-DD): " new_expiry
-    if [[ ! "$new_expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    if ! is_valid_date "$new_expiry"; then
         echo -e "${COLOR_ERROR}Invalid date format. Use YYYY-MM-DD${COLOR_RESET}"
         return 1
     fi
     
     # Get current date for comparison
     local current_date=$(date '+%Y-%m-%d')
+    local current_ts=$(get_timestamp "$current_date")
+    local new_expiry_ts=$(get_timestamp "$new_expiry")
+    
+    if [[ $new_expiry_ts -lt $current_ts ]]; then
+        echo -e "${COLOR_WARNING}Warning: New expiry date is in the past${COLOR_RESET}"
+        read -p "Continue anyway? (y/N): " confirm
+        [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return 1
+    fi
     
     # Find and update user in database
     local user_found=false
     local temp_file=$(mktemp)
     
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
             echo "$line" >> "$temp_file"
             continue
         fi
         
-        local service=$(echo "$line" | cut -d'|' -f1)
-        local current_user=$(echo "$line" | cut -d'|' -f2)
+        IFS='|' read -r service current_user password port method expiry created status <<< "$line"
         
         if [[ "$current_user" == "$username" ]]; then
             user_found=true
-            local password=$(echo "$line" | cut -d'|' -f3)
-            local port=$(echo "$line" | cut -d'|' -f4)
-            local method=$(echo "$line" | cut -d'|' -f5)
-            local created=$(echo "$line" | cut -d'|' -f7)
-            
             # Update the line with new expiry
             echo "$service|$username|$password|$port|$method|$new_expiry|$created|active" >> "$temp_file"
             
@@ -128,7 +149,7 @@ renew_service_users() {
     esac
     
     read -p "Enter new expiry date for all $service users (YYYY-MM-DD): " new_expiry
-    if [[ ! "$new_expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    if ! is_valid_date "$new_expiry"; then
         echo -e "${COLOR_ERROR}Invalid date format. Use YYYY-MM-DD${COLOR_RESET}"
         return 1
     fi
@@ -136,21 +157,15 @@ renew_service_users() {
     local count=0
     local temp_file=$(mktemp)
     
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
             echo "$line" >> "$temp_file"
             continue
         fi
         
-        local current_service=$(echo "$line" | cut -d'|' -f1)
-        local username=$(echo "$line" | cut -d'|' -f2)
+        IFS='|' read -r current_service username password port method expiry created status <<< "$line"
         
         if [[ "$current_service" == "$service" ]]; then
-            local password=$(echo "$line" | cut -d'|' -f3)
-            local port=$(echo "$line" | cut -d'|' -f4)
-            local method=$(echo "$line" | cut -d'|' -f5)
-            local created=$(echo "$line" | cut -d'|' -f7)
-            
             # Update the line with new expiry
             echo "$service|$username|$password|$port|$method|$new_expiry|$created|active" >> "$temp_file"
             ((count++))
@@ -172,8 +187,10 @@ renew_expired_users() {
     echo ""
     
     local current_date=$(date '+%Y-%m-%d')
+    local current_ts=$(get_timestamp "$current_date")
+    
     read -p "Enter new expiry date for expired users (YYYY-MM-DD): " new_expiry
-    if [[ ! "$new_expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    if ! is_valid_date "$new_expiry"; then
         echo -e "${COLOR_ERROR}Invalid date format. Use YYYY-MM-DD${COLOR_RESET}"
         return 1
     fi
@@ -181,23 +198,16 @@ renew_expired_users() {
     local count=0
     local temp_file=$(mktemp)
     
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
             echo "$line" >> "$temp_file"
             continue
         fi
         
-        local service=$(echo "$line" | cut -d'|' -f1)
-        local username=$(echo "$line" | cut -d'|' -f2)
-        local expiry=$(echo "$line" | cut -d'|' -f6)
-        local status=$(echo "$line" | cut -d'|' -f8)
+        IFS='|' read -r service username password port method expiry created status <<< "$line"
+        local expiry_ts=$(get_timestamp "$expiry")
         
-        if [[ "$expiry" < "$current_date" ]] || [[ "$status" == "expired" ]]; then
-            local password=$(echo "$line" | cut -d'|' -f3)
-            local port=$(echo "$line" | cut -d'|' -f4)
-            local method=$(echo "$line" | cut -d'|' -f5)
-            local created=$(echo "$line" | cut -d'|' -f7)
-            
+        if [[ $expiry_ts -lt $current_ts ]] || [[ "$status" == "expired" ]]; then
             # Update the line with new expiry and active status
             echo "$service|$username|$password|$port|$method|$new_expiry|$created|active" >> "$temp_file"
             ((count++))
@@ -219,11 +229,13 @@ auto_renew_near_expiry() {
     echo ""
     
     local current_date=$(date '+%Y-%m-%d')
+    local current_ts=$(get_timestamp "$current_date")
     local renew_days=7  # Renew users expiring within 7 days
     
-    # Calculate target date
-    local target_date=$(date -d "+$renew_days days" '+%Y-%m-%d')
-    local new_expiry=$(date -d "+30 days" '+%Y-%m-%d')  # Extend by 30 days
+    # Calculate target date using safe function
+    local target_date=$(get_future_date "$renew_days")
+    local target_ts=$(get_timestamp "$target_date")
+    local new_expiry=$(get_future_date 30)  # Extend by 30 days
     
     local count=0
     local temp_file=$(mktemp)
@@ -231,24 +243,17 @@ auto_renew_near_expiry() {
     echo -e "${COLOR_INFO}Checking users expiring before $target_date...${COLOR_RESET}"
     echo ""
     
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
             echo "$line" >> "$temp_file"
             continue
         fi
         
-        local service=$(echo "$line" | cut -d'|' -f1)
-        local username=$(echo "$line" | cut -d'|' -f2)
-        local expiry=$(echo "$line" | cut -d'|' -f6)
-        local status=$(echo "$line" | cut -d'|' -f8)
+        IFS='|' read -r service username password port method expiry created status <<< "$line"
+        local expiry_ts=$(get_timestamp "$expiry")
         
-        # Check if user is active and expiring soon
-        if [[ "$status" == "active" ]] && [[ "$expiry" < "$target_date" ]]; then
-            local password=$(echo "$line" | cut -d'|' -f3)
-            local port=$(echo "$line" | cut -d'|' -f4)
-            local method=$(echo "$line" | cut -d'|' -f5)
-            local created=$(echo "$line" | cut -d'|' -f7)
-            
+        # Check if user is active and expiring soon using timestamp comparison
+        if [[ "$status" == "active" ]] && [[ $expiry_ts -le $target_ts ]] && [[ $expiry_ts -ge $current_ts ]]; then
             # Update the line with new expiry
             echo "$service|$username|$password|$port|$method|$new_expiry|$created|active" >> "$temp_file"
             ((count++))
@@ -270,6 +275,9 @@ show_expiry_report() {
     echo ""
     
     local current_date=$(date '+%Y-%m-%d')
+    local current_ts=$(get_timestamp "$current_date")
+    local soon_ts=$(get_timestamp "$(get_future_date 7)")
+    
     local total_users=0
     local active_users=0
     local expired_users=0
@@ -278,24 +286,22 @@ show_expiry_report() {
     echo -e "${COLOR_PRIMARY}Username | Service | Expiry Date | Status${COLOR_RESET}"
     echo "─────────┼─────────┼─────────────┼────────"
     
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
             continue
         fi
         
         ((total_users++))
         
-        local service=$(echo "$line" | cut -d'|' -f1)
-        local username=$(echo "$line" | cut -d'|' -f2)
-        local expiry=$(echo "$line" | cut -d'|' -f6)
-        local status=$(echo "$line" | cut -d'|' -f8)
+        IFS='|' read -r service username password port method expiry created status <<< "$line"
+        local expiry_ts=$(get_timestamp "$expiry")
         
-        # Determine status
+        # Determine status using timestamp comparison
         if [[ "$status" == "active" ]]; then
-            if [[ "$expiry" < "$current_date" ]]; then
+            if [[ $expiry_ts -lt $current_ts ]]; then
                 status_display="${COLOR_ERROR}EXPIRED${COLOR_RESET}"
                 ((expired_users++))
-            elif [[ "$expiry" < $(date -d "+7 days" '+%Y-%m-%d') ]]; then
+            elif [[ $expiry_ts -le $soon_ts ]]; then
                 status_display="${COLOR_WARNING}SOON${COLOR_RESET}"
                 ((expiring_soon++))
                 ((active_users++))
@@ -308,7 +314,7 @@ show_expiry_report() {
             ((expired_users++))
         fi
         
-        echo -e "$username | $service | $expiry | $status_display"
+        printf "%-9s | %-7s | %-11s | %b\n" "$username" "$service" "$expiry" "$status_display"
     done < "$USER_DB"
     
     echo ""
@@ -322,17 +328,15 @@ show_expiry_report() {
     if [[ $expiring_soon -gt 0 ]]; then
         echo ""
         echo -e "${COLOR_WARNING}Users expiring in next 7 days:${COLOR_RESET}"
-        while IFS= read -r line; do
+        while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
                 continue
             fi
             
-            local service=$(echo "$line" | cut -d'|' -f1)
-            local username=$(echo "$line" | cut -d'|' -f2)
-            local expiry=$(echo "$line" | cut -d'|' -f6)
-            local status=$(echo "$line" | cut -d'|' -f8)
+            IFS='|' read -r service username password port method expiry created status <<< "$line"
+            local expiry_ts=$(get_timestamp "$expiry")
             
-            if [[ "$status" == "active" ]] && [[ "$expiry" < $(date -d "+7 days" '+%Y-%m-%d') ]] && [[ "$expiry" >= "$current_date" ]]; then
+            if [[ "$status" == "active" ]] && [[ $expiry_ts -le $soon_ts ]] && [[ $expiry_ts -ge $current_ts ]]; then
                 echo -e "  $username ($service) - $expiry"
             fi
         done < "$USER_DB"
@@ -363,27 +367,24 @@ bulk_renew_from_file() {
     
     # Read the renewal file
     declare -A renew_map
-    while IFS='|' read -r username expiry; do
-        if [[ -n "$username" && -n "$expiry" ]]; then
+    while IFS='|' read -r username expiry || [[ -n "$username" ]]; do
+        if [[ -n "$username" && -n "$expiry" ]] && is_valid_date "$expiry"; then
             renew_map["$username"]="$expiry"
+        elif [[ -n "$username" && -n "$expiry" ]]; then
+            echo -e "${COLOR_WARNING}Invalid date format for user $username: $expiry${COLOR_RESET}"
         fi
     done < "$renew_file"
     
     # Process user database
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
             echo "$line" >> "$temp_file"
             continue
         fi
         
-        local service=$(echo "$line" | cut -d'|' -f1)
-        local username=$(echo "$line" | cut -d'|' -f2)
+        IFS='|' read -r service username password port method expiry created status <<< "$line"
         
         if [[ -n "${renew_map[$username]}" ]]; then
-            local password=$(echo "$line" | cut -d'|' -f3)
-            local port=$(echo "$line" | cut -d'|' -f4)
-            local method=$(echo "$line" | cut -d'|' -f5)
-            local created=$(echo "$line" | cut -d'|' -f7)
             local new_expiry="${renew_map[$username]}"
             
             # Update the line with new expiry
@@ -415,7 +416,41 @@ show_renew_menu() {
     echo ""
     
     # Show quick stats
-    show_expiry_report | tail -5
+    local current_date=$(date '+%Y-%m-%d')
+    local current_ts=$(get_timestamp "$current_date")
+    local soon_ts=$(get_timestamp "$(get_future_date 7)")
+    
+    local total_users=0
+    local active_users=0
+    local expired_users=0
+    local expiring_soon=0
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
+            continue
+        fi
+        
+        ((total_users++))
+        IFS='|' read -r service username password port method expiry created status <<< "$line"
+        local expiry_ts=$(get_timestamp "$expiry")
+        
+        if [[ "$status" == "active" ]]; then
+            if [[ $expiry_ts -lt $current_ts ]]; then
+                ((expired_users++))
+            elif [[ $expiry_ts -le $soon_ts ]]; then
+                ((expiring_soon++))
+                ((active_users++))
+            else
+                ((active_users++))
+            fi
+        else
+            ((expired_users++))
+        fi
+    done < "$USER_DB"
+    
+    echo -e "${COLOR_INFO}Quick Stats:${COLOR_RESET}"
+    echo -e "Total Users: $total_users | Active: $active_users"
+    echo -e "Expiring Soon: $expiring_soon | Expired: $expired_users"
     echo ""
     
     echo -e "${COLOR_PRIMARY}RENEWAL MENU:${COLOR_RESET}"
@@ -432,6 +467,12 @@ show_renew_menu() {
 # Main renew function
 main() {
     load_theme
+    
+    # Check if user database exists
+    if [[ ! -f "$USER_DB" ]]; then
+        echo -e "${COLOR_ERROR}User database not found: $USER_DB${COLOR_RESET}"
+        return 1
+    fi
     
     while true; do
         show_renew_menu
