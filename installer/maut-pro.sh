@@ -116,10 +116,19 @@ update_system() {
             sleep 5
         done
         
-        # Upgrade with essential packages only
-        if ! apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+        # Upgrade with essential packages only - FIXED VERSION
+        if ! apt-get upgrade -y \
+          -o Dpkg::Options::="--force-confdef" \
+          -o Dpkg::Options::="--force-confold" \
+          >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+
             warning "Standard upgrade failed, trying minimal upgrade..."
-            apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" --allow-downgrades --allow-remove-essential --allow-change-held-packages >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
+
+            apt-get upgrade -y \
+              -o Dpkg::Options::="--force-confdef" \
+              -o Dpkg::Options::="--force-confold" \
+              --allow-downgrades --allow-remove-essential --allow-change-held-packages \
+              >> "$INSTALL_LOG" 2>> "$ERROR_LOG" || {
                 error "Failed to upgrade system packages"
             }
         fi
@@ -146,9 +155,9 @@ install_dependencies() {
             error "Failed to install dependencies"
         }
     else
-        # Debian/Ubuntu dependencies with retry
+        # Debian/Ubuntu dependencies with retry - INCLUDING DNSUTILS
         for i in {1..3}; do
-            if apt-get install -y curl wget git sudo net-tools bc jq openssl cron >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
+            if apt-get install -y curl wget git sudo net-tools bc jq openssl cron dnsutils >> "$INSTALL_LOG" 2>> "$ERROR_LOG"; then
                 break
             fi
             if [[ $i -eq 3 ]]; then
